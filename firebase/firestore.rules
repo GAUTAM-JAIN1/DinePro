@@ -1,0 +1,57 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Restaurant document — public read, admin/superadmin write
+    match /restaurants/{restaurantId} {
+      allow read: if true;
+      allow write: if isRestaurantStaff(restaurantId, 'admin') || isSuperAdmin();
+      
+      // Menu — public read, admin write
+      match /menu/{itemId} {
+        allow read: if true;
+        allow write: if isRestaurantStaff(restaurantId, 'admin');
+      }
+      
+      // Orders — staff read/write, public create
+      match /orders/{orderId} {
+        allow read: if isRestaurantStaff(restaurantId, 'admin') 
+                    || isRestaurantStaff(restaurantId, 'chef')
+                    || isRestaurantStaff(restaurantId, 'receptionist');
+        allow create: if true;
+        allow update: if isRestaurantStaff(restaurantId, 'admin')
+                     || isRestaurantStaff(restaurantId, 'chef')
+                     || isRestaurantStaff(restaurantId, 'receptionist');
+      }
+      
+      // Tables — public read, admin write
+      match /tables/{tableId} {
+        allow read: if true;
+        allow write: if isRestaurantStaff(restaurantId, 'admin');
+      }
+      
+      // Staff — admin only
+      match /staff/{staffId} {
+        allow read: if isRestaurantStaff(restaurantId, 'admin');
+        allow write: if isRestaurantStaff(restaurantId, 'admin');
+      }
+    }
+    
+    // Super admin config
+    match /superAdmin/{doc} {
+      allow read, write: if isSuperAdmin();
+    }
+    
+    function isRestaurantStaff(restaurantId, role) {
+      return request.auth != null 
+             && request.auth.token.restaurantId == restaurantId
+             && request.auth.token.role == role;
+    }
+    
+    function isSuperAdmin() {
+      return request.auth != null 
+             && (request.auth.token.platformAdmin == true 
+                 || request.auth.token.superAdmin == true
+                 || request.auth.token.role == 'superadmin');
+    }
+  }
+}
