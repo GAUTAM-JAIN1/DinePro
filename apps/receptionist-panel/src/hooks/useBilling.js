@@ -116,11 +116,15 @@ export function useBilling(restaurantId) {
       fetchHistory()
     })
 
+    // Cancel order — dono panels se hata do
+    socket.on('order_cancelled', ({ orderId }) => {
+      setOrders(prev => prev.filter(o => o.id !== orderId))
+    })
+
     socket.on('stats_update', (updatedStats) => {
       setStats(updatedStats)
     })
 
-    // Waiter called by customer
     socket.on('waiter_called', (data) => {
       if (String(data.restaurantId) !== String(restaurantId)) return
       const alert = {
@@ -130,7 +134,6 @@ export function useBilling(restaurantId) {
         calledAt: data.calledAt,
       }
       setWaiterAlerts(prev => {
-        // Avoid duplicate alerts for same table within 5 seconds
         const recent = prev.find(a =>
           a.tableId === alert.tableId &&
           Math.abs(new Date(a.calledAt) - new Date(alert.calledAt)) < 5000
@@ -139,7 +142,6 @@ export function useBilling(restaurantId) {
         return [alert, ...prev]
       })
 
-      // Play notification sound
       try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)()
         const osc = ctx.createOscillator()
@@ -153,20 +155,20 @@ export function useBilling(restaurantId) {
         osc.stop(ctx.currentTime + 0.5)
       } catch (_) {}
 
-      // Auto-dismiss after 30 seconds
       setTimeout(() => {
         setWaiterAlerts(prev => prev.filter(a => a.id !== alert.id))
       }, 30_000)
     })
 
     return () => {
-      socket.off('connect',       joinRoom)
+      socket.off('connect',         joinRoom)
       socket.off('disconnect')
       socket.off('bill_update')
       socket.off('order_received')
       socket.off('order_updated')
       socket.off('status_changed')
       socket.off('bill_closed')
+      socket.off('order_cancelled')
       socket.off('stats_update')
       socket.off('waiter_called')
     }
@@ -208,6 +210,14 @@ export function useBilling(restaurantId) {
     )
   }, [restaurantId])
 
+  // Cancel order — socket emit + local state update
+  const cancelOrder = useCallback((orderId, tableNumber, reason = '') => {
+    const socket = getSocket()
+    socket.emit('cancel_order', { restaurantId, orderId, reason })
+    // Optimistically remove from local state
+    setOrders(prev => prev.filter(o => o.id !== orderId))
+  }, [restaurantId])
+
   const dismissWaiterAlert = useCallback((alertId) => {
     setWaiterAlerts(prev => prev.filter(a => a.id !== alertId))
   }, [])
@@ -238,6 +248,7 @@ export function useBilling(restaurantId) {
     waiterAlerts,
     closeBill,
     markItemServed,
+    cancelOrder,
     dismissWaiterAlert,
   }
 }

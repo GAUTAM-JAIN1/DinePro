@@ -3,6 +3,7 @@ const {
   updateOrderItemStatus,
   closeBill,
   getDailyStats,
+  cancelOrder,
 } = require('../services/orderService')
 const { getRestaurant } = require('../services/restaurantService')
 
@@ -83,6 +84,24 @@ function initOrderSocket(io) {
       }
     })
 
+    // Cancel order — receptionist cancels, chef panel se bhi hata do
+    socket.on('cancel_order', async (data) => {
+      try {
+        const { restaurantId, orderId, reason } = data
+        if (!restaurantId || !orderId) return
+
+        await cancelOrder(restaurantId, orderId, reason)
+
+        // Broadcast to all panels — chef + receptionist dono se hatega
+        io.to(restaurantId).emit('order_cancelled', { orderId, restaurantId, reason })
+        await emitStats(io, restaurantId)
+        console.log(`Order cancelled: ${orderId} reason: ${reason || 'none'}`)
+      } catch (err) {
+        console.error('cancel_order error:', err)
+        socket.emit('cancel_order_error', { error: err.message })
+      }
+    })
+
     socket.on('chef_message', async (data) => {
       try {
         if (!(await isServiceEnabled(data.restaurantId))) {
@@ -114,7 +133,6 @@ function initOrderSocket(io) {
       }
     })
 
-    // Customer calls waiter
     socket.on('call_waiter', async (data) => {
       try {
         if (!data.restaurantId || !data.tableId) return
@@ -127,7 +145,6 @@ function initOrderSocket(io) {
           tableNumber: data.tableNumber ?? data.tableId,
           calledAt: new Date().toISOString(),
         })
-        console.log(`Waiter called: restaurant=${data.restaurantId} table=${data.tableId}`)
       } catch (err) {
         console.error('call_waiter error:', err)
       }

@@ -11,7 +11,9 @@ function validate(schema) {
       next()
     } catch (err) {
       if (err instanceof z.ZodError) {
-        const messages = err.errors.map((e) => `${e.path.join('.')}: ${e.message}`)
+        const messages = err.errors
+          ? err.errors.map((e) => `${e.path.join('.')}: ${e.message}`)
+          : ['Validation failed']
         return res.status(400).json({
           success: false,
           error: 'Validation failed',
@@ -23,12 +25,16 @@ function validate(schema) {
   }
 }
 
-// ──────────────────────── Menu Schemas ────────────────────────
+// ─────────────────────── Menu Schemas ───────────────────────
+
+const coerceNumber = z.union([z.number(), z.string().transform(Number)]).refine(n => !isNaN(n), 'Must be a number')
+const coercePositive = coerceNumber.refine(n => n > 0, 'Must be positive')
+const coerceNonNeg = coerceNumber.refine(n => n >= 0, 'Must be >= 0')
 
 const variantSchema = z.object({
   name: z.string().min(1),
   nameHindi: z.string().optional().default(''),
-  price: z.number().positive(),
+  price: coercePositive,
 })
 
 const menuItemCreate = z.object({
@@ -36,7 +42,7 @@ const menuItemCreate = z.object({
   nameHindi: z.string().optional().default(''),
   description: z.string().optional().default(''),
   descriptionHindi: z.string().optional().default(''),
-  price: z.number().positive('price must be positive'),
+  price: coercePositive,
   category: z.string().min(1).default('Mains'),
   categoryHindi: z.string().optional().default(''),
   imageUrl: z.string().optional().default(''),
@@ -45,7 +51,7 @@ const menuItemCreate = z.object({
   isBestseller: z.boolean().optional().default(false),
   hasVariants: z.boolean().optional().default(false),
   variants: z.array(variantSchema).optional().default([]),
-  sortOrder: z.number().optional().default(0),
+  sortOrder: coerceNonNeg.optional().default(0),
   restaurantId: z.string().optional(),
 })
 
@@ -60,14 +66,14 @@ const menuReorder = z.object({
   ).min(1),
 })
 
-// ──────────────────────── Order Schemas ────────────────────────
+// ─────────────────────── Order Schemas ───────────────────────
 
 const orderItemSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   nameHindi: z.string().optional().default(''),
-  price: z.number().nonnegative(),
-  quantity: z.number().int().positive(),
+  price: coerceNonNeg,
+  quantity: z.union([z.number(), z.string().transform(Number)]).refine(n => Number.isInteger(n) && n > 0, 'Must be positive integer'),
   variant: z.string().nullable().optional().default(null),
   specialInstructions: z.string().optional().default(''),
   isVeg: z.boolean().optional().default(true),
@@ -76,12 +82,12 @@ const orderItemSchema = z.object({
 const orderCreate = z.object({
   restaurantId: z.string().min(1, 'restaurantId is required'),
   tableId: z.string().min(1),
-  tableNumber: z.string().or(z.number()).transform(String),
+  tableNumber: z.union([z.string(), z.number()]).transform(String),
   items: z.array(orderItemSchema).min(1, 'At least one item is required'),
   specialInstructions: z.string().optional().default(''),
 })
 
-// ──────────────────────── Staff Schemas ────────────────────────
+// ─────────────────────── Staff Schemas ───────────────────────
 
 const staffCreate = z.object({
   email: z.string().email('Valid email is required'),
@@ -91,7 +97,7 @@ const staffCreate = z.object({
   }),
 })
 
-// ──────────────────────── Restaurant Schemas ────────────────────────
+// ─────────────────────── Restaurant Schemas ───────────────────────
 
 const restaurantCreate = z.object({
   name: z.string().min(1, 'Restaurant name is required'),

@@ -11,20 +11,31 @@ const starterItems = [
 function SetupWizard({ restaurant, setRestaurant }) {
   const [step, setStep] = useState(0)
   const [saving, setSaving] = useState(false)
+
   const [profile, setProfile] = useState({
     name: restaurant.name || '',
     address: restaurant.address || '',
     phone: restaurant.phone || '',
     themeColor: restaurant.themeColor || '#B88746',
   })
+
+  // NEW: Billing defaults step
+  const [billing, setBilling] = useState({
+    defaultGstPercent: restaurant.defaultGstPercent ?? 0,
+    defaultServiceCharge: restaurant.defaultServiceCharge ?? 0,
+  })
+
   const [menuItems, setMenuItems] = useState(starterItems)
   const [tableCount, setTableCount] = useState(3)
 
+  const steps = ['Profile', 'Billing', 'Menu', 'Tables']
+
   const canContinue = useMemo(() => {
     if (step === 0) return profile.name.trim().length > 1
-    if (step === 1) return menuItems.some((item) => item.name.trim() && Number(item.price) > 0)
+    if (step === 1) return true // billing is optional, always allow continue
+    if (step === 2) return menuItems.some((item) => item.name.trim() && Number(item.price) > 0)
     return tableCount > 0
-  }, [menuItems, profile.name, step, tableCount])
+  }, [profile.name, step, menuItems, tableCount])
 
   const updateMenuItem = (index, field, value) => {
     setMenuItems((prev) =>
@@ -42,8 +53,11 @@ function SetupWizard({ restaurant, setRestaurant }) {
   const finishSetup = async () => {
     setSaving(true)
     try {
+      // Save profile + billing defaults together
       await api.put(`/api/restaurants/${restaurant.id}`, {
         ...profile,
+        defaultGstPercent: Number(billing.defaultGstPercent),
+        defaultServiceCharge: Number(billing.defaultServiceCharge),
       })
 
       const validMenuItems = menuItems.filter((item) => item.name.trim() && Number(item.price) > 0)
@@ -81,7 +95,7 @@ function SetupWizard({ restaurant, setRestaurant }) {
     }
   }
 
-  const steps = ['Profile', 'Menu', 'Tables']
+  const inputStyle = 'w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-orange-400'
 
   return (
     <div className="min-h-screen bg-gray-50 p-8">
@@ -96,14 +110,19 @@ function SetupWizard({ restaurant, setRestaurant }) {
           </p>
         </div>
 
-        <div className="mb-6 grid grid-cols-3 gap-3">
+        {/* Step Tabs — now 4 */}
+        <div className="mb-6 grid grid-cols-4 gap-3">
           {steps.map((label, index) => (
             <button
               key={label}
               type="button"
-              onClick={() => setStep(index)}
-              className={`rounded-xl px-4 py-3 text-sm font-semibold ${
-                step === index ? 'bg-orange-500 text-white' : 'bg-white text-gray-500'
+              onClick={() => index < step && setStep(index)} // only allow going back
+              className={`rounded-xl px-4 py-3 text-sm font-semibold transition ${
+                step === index
+                  ? 'bg-orange-500 text-white'
+                  : index < step
+                  ? 'bg-orange-100 text-orange-600 cursor-pointer'
+                  : 'bg-white text-gray-400 cursor-default'
               }`}
             >
               {index + 1}. {label}
@@ -112,30 +131,32 @@ function SetupWizard({ restaurant, setRestaurant }) {
         </div>
 
         <div className="rounded-2xl bg-white p-6 shadow-sm">
+
+          {/* STEP 0: Profile */}
           {step === 0 && (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <label>
                 <span className="mb-2 block text-sm font-medium text-gray-700">Restaurant Name *</span>
                 <input
                   value={profile.name}
-                  onChange={(event) => setProfile({ ...profile, name: event.target.value })}
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-orange-400"
+                  onChange={(e) => setProfile({ ...profile, name: e.target.value })}
+                  className={inputStyle}
                 />
               </label>
               <label>
                 <span className="mb-2 block text-sm font-medium text-gray-700">Phone</span>
                 <input
                   value={profile.phone}
-                  onChange={(event) => setProfile({ ...profile, phone: event.target.value })}
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-orange-400"
+                  onChange={(e) => setProfile({ ...profile, phone: e.target.value })}
+                  className={inputStyle}
                 />
               </label>
               <label className="md:col-span-2">
                 <span className="mb-2 block text-sm font-medium text-gray-700">Address</span>
                 <input
                   value={profile.address}
-                  onChange={(event) => setProfile({ ...profile, address: event.target.value })}
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-orange-400"
+                  onChange={(e) => setProfile({ ...profile, address: e.target.value })}
+                  className={inputStyle}
                 />
               </label>
               <label>
@@ -143,51 +164,121 @@ function SetupWizard({ restaurant, setRestaurant }) {
                 <input
                   type="color"
                   value={profile.themeColor}
-                  onChange={(event) => setProfile({ ...profile, themeColor: event.target.value })}
+                  onChange={(e) => setProfile({ ...profile, themeColor: e.target.value })}
                   className="h-12 w-20 rounded-xl border border-gray-200"
                 />
               </label>
             </div>
           )}
 
+          {/* STEP 1: Billing Defaults — NEW */}
           {step === 1 && (
+            <div className="max-w-md space-y-5">
+              <div>
+                <p className="text-sm text-gray-500 mb-4">
+                  These will be pre-filled in the receptionist's settlement form. You can change them anytime from Settings.
+                </p>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">
+                  Default GST (%)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="28"
+                  value={billing.defaultGstPercent}
+                  onChange={(e) => setBilling({ ...billing, defaultGstPercent: e.target.value })}
+                  placeholder="e.g. 5"
+                  className={inputStyle}
+                />
+                <p className="mt-1 text-xs text-gray-400">Common rates: 5% (restaurants), 12% or 18% (AC/bar). Set 0 if not applicable.</p>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">
+                  Default Service Charge (₹)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  value={billing.defaultServiceCharge}
+                  onChange={(e) => setBilling({ ...billing, defaultServiceCharge: e.target.value })}
+                  placeholder="e.g. 20"
+                  className={inputStyle}
+                />
+                <p className="mt-1 text-xs text-gray-400">Fixed amount per bill. Set 0 if not applicable.</p>
+              </div>
+
+              {/* Live Preview */}
+              {(Number(billing.defaultGstPercent) > 0 || Number(billing.defaultServiceCharge) > 0) && (
+                <div className="rounded-xl bg-orange-50 p-4 text-sm">
+                  <p className="font-semibold text-orange-700 mb-2">Preview on a ₹500 bill:</p>
+                  <div className="space-y-1 text-gray-600">
+                    <div className="flex justify-between"><span>Subtotal</span><span>₹500</span></div>
+                    {Number(billing.defaultServiceCharge) > 0 && (
+                      <div className="flex justify-between"><span>Service Charge</span><span>+₹{billing.defaultServiceCharge}</span></div>
+                    )}
+                    {Number(billing.defaultGstPercent) > 0 && (
+                      <div className="flex justify-between">
+                        <span>GST ({billing.defaultGstPercent}%)</span>
+                        <span>+₹{((500 * Number(billing.defaultGstPercent)) / 100).toFixed(0)}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between font-bold text-gray-800 border-t pt-1 mt-1">
+                      <span>Total</span>
+                      <span>₹{(500 + Number(billing.defaultServiceCharge) + (500 * Number(billing.defaultGstPercent)) / 100).toFixed(0)}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* STEP 2: Menu */}
+          {step === 2 && (
             <div className="space-y-3">
               {menuItems.map((item, index) => (
                 <div key={index} className="grid grid-cols-1 gap-3 rounded-xl bg-gray-50 p-3 md:grid-cols-4">
                   <input
                     value={item.name}
-                    onChange={(event) => updateMenuItem(index, 'name', event.target.value)}
+                    onChange={(e) => updateMenuItem(index, 'name', e.target.value)}
                     placeholder="Item name"
                     className="rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-orange-400"
                   />
                   <input
                     type="number"
                     value={item.price}
-                    onChange={(event) => updateMenuItem(index, 'price', event.target.value)}
+                    onChange={(e) => updateMenuItem(index, 'price', e.target.value)}
                     placeholder="Price"
                     className="rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-orange-400"
                   />
                   <input
                     value={item.category}
-                    onChange={(event) => updateMenuItem(index, 'category', event.target.value)}
+                    onChange={(e) => updateMenuItem(index, 'category', e.target.value)}
                     placeholder="Category"
                     className="rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-orange-400"
                   />
                   <input
                     value={item.description}
-                    onChange={(event) => updateMenuItem(index, 'description', event.target.value)}
+                    onChange={(e) => updateMenuItem(index, 'description', e.target.value)}
                     placeholder="Description"
                     className="rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-orange-400"
                   />
                 </div>
               ))}
-              <button onClick={addMenuRow} className="rounded-xl border border-orange-200 px-4 py-2 text-sm font-semibold text-orange-600">
+              <button
+                onClick={addMenuRow}
+                className="rounded-xl border border-orange-200 px-4 py-2 text-sm font-semibold text-orange-600"
+              >
                 + Add another item
               </button>
             </div>
           )}
 
-          {step === 2 && (
+          {/* STEP 3: Tables */}
+          {step === 3 && (
             <div className="max-w-md">
               <label>
                 <span className="mb-2 block text-sm font-medium text-gray-700">How many tables?</span>
@@ -196,8 +287,8 @@ function SetupWizard({ restaurant, setRestaurant }) {
                   min="1"
                   max="100"
                   value={tableCount}
-                  onChange={(event) => setTableCount(event.target.value)}
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-orange-400"
+                  onChange={(e) => setTableCount(e.target.value)}
+                  className={inputStyle}
                 />
               </label>
               <p className="mt-3 text-sm text-gray-500">
@@ -207,6 +298,7 @@ function SetupWizard({ restaurant, setRestaurant }) {
           )}
         </div>
 
+        {/* Navigation Buttons */}
         <div className="mt-6 flex justify-between">
           <button
             type="button"
@@ -216,12 +308,13 @@ function SetupWizard({ restaurant, setRestaurant }) {
           >
             Back
           </button>
+
           {step < steps.length - 1 ? (
             <button
               type="button"
               onClick={() => setStep((prev) => prev + 1)}
               disabled={!canContinue || saving}
-              className="rounded-xl bg-orange-500 px-6 py-3 text-sm font-semibold text-white disabled:opacity-40"
+              className="rounded-xl bg-orange-500 px-6 py-3 text-sm font-semibold text-white disabled:opacity-40 hover:bg-orange-600 transition"
             >
               Continue
             </button>
@@ -230,7 +323,7 @@ function SetupWizard({ restaurant, setRestaurant }) {
               type="button"
               onClick={finishSetup}
               disabled={!canContinue || saving}
-              className="rounded-xl bg-orange-500 px-6 py-3 text-sm font-semibold text-white disabled:opacity-40"
+              className="rounded-xl bg-orange-500 px-6 py-3 text-sm font-semibold text-white disabled:opacity-40 hover:bg-orange-600 transition"
             >
               {saving ? 'Finishing...' : 'Finish Setup'}
             </button>

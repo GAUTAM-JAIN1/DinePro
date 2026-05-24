@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import TableCard from '../components/TableCard'
+import DailyReport from '../components/DailyReport'
 import { useBilling } from '../hooks/useBilling'
 
 const formatDateTime = (value) => {
@@ -56,18 +57,20 @@ function WaiterAlertBanner({ alerts, onDismiss }) {
 function BillingDashboard({ restaurantId }) {
   const {
     tableGroups, history, connected, closeBill, markItemServed, stats,
-    waiterAlerts, dismissWaiterAlert,
+    waiterAlerts, dismissWaiterAlert, restaurant,
+    cancelOrder,  // ← Task: cancelOrder added
   } = useBilling(restaurantId)
 
   const [searchTerm,   setSearchTerm]   = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [activeView,   setActiveView]   = useState('live')
+  const [showReport,   setShowReport]   = useState(false)
 
-  const liveTables   = useMemo(() => Object.values(tableGroups), [tableGroups])
-  const tables       = liveTables
-  const totalRevenue = tables.reduce((sum, t) => sum + t.totalAmount, 0)
-  const totalItems   = tables.reduce((sum, t) => sum + t.allItems.length, 0)
-  const urgentTables = tables.filter((t) => {
+  const liveTables     = useMemo(() => Object.values(tableGroups), [tableGroups])
+  const tables         = liveTables
+  const totalRevenue   = tables.reduce((sum, t) => sum + t.totalAmount, 0)
+  const totalItems     = tables.reduce((sum, t) => sum + t.allItems.length, 0)
+  const urgentTables   = tables.filter((t) => {
     const status = t.orders.at(-1)?.status || 'new'
     return status === 'new' || status === 'ready'
   }).length
@@ -110,15 +113,23 @@ function BillingDashboard({ restaurantId }) {
               </p>
             </div>
 
-            <div
-              className={`inline-flex w-fit items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold ${
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setShowReport(true)}
+                className="filter-button"
+                title="View daily report"
+              >
+                📊 Daily Report
+              </button>
+
+              <div className={`inline-flex w-fit items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold ${
                 connected
                   ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
                   : 'border-rose-200 bg-rose-50 text-rose-700'
-              }`}
-            >
-              <span className={`h-2.5 w-2.5 rounded-full ${connected ? 'bg-emerald-500' : 'bg-rose-500'}`} />
-              {connected ? 'Live sync' : 'Reconnecting'}
+              }`}>
+                <span className={`h-2.5 w-2.5 rounded-full ${connected ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                {connected ? 'Live sync' : 'Reconnecting'}
+              </div>
             </div>
           </div>
 
@@ -149,7 +160,6 @@ function BillingDashboard({ restaurantId }) {
 
       <main className="mx-auto w-full max-w-7xl px-4 py-5 sm:px-6 lg:px-8">
 
-        {/* Waiter alert banners */}
         <WaiterAlertBanner alerts={waiterAlerts} onDismiss={dismissWaiterAlert} />
 
         <section className="mb-5 flex flex-col gap-3 rounded-2xl border border-[rgba(184,135,70,0.18)] bg-[var(--card)] p-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
@@ -255,11 +265,21 @@ function BillingDashboard({ restaurantId }) {
                 tableGroup={tableGroup}
                 onCloseBill={closeBill}
                 onMarkItemServed={markItemServed}
+                onCancelOrder={cancelOrder}  // ← cancelOrder prop passed
+                restaurant={restaurant}
               />
             ))}
           </section>
         )}
       </main>
+
+      {showReport && (
+        <DailyReport
+          restaurantId={restaurantId}
+          restaurantName={restaurant?.name || 'Restaurant'}
+          onClose={() => setShowReport(false)}
+        />
+      )}
 
       <style>{`
         @keyframes fadeIn { from{opacity:0;transform:translateY(-6px)} to{opacity:1;transform:translateY(0)} }

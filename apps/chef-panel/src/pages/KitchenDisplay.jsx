@@ -4,7 +4,8 @@ import OrderTicket from '../components/OrderTicket'
 
 const URGENT_AFTER_MS = 15 * 60 * 1000
 
-function KitchenDisplay({ restaurantId }) {
+// restaurantName prop added — no more hardcoded "Tadka Junction"
+function KitchenDisplay({ restaurantId, restaurantName }) {
   const [soundOn, setSoundOn] = useState(true)
   const [dietFilter, setDietFilter] = useState('all')
   const [categoryFilter, setCategoryFilter] = useState('all')
@@ -42,13 +43,10 @@ function KitchenDisplay({ restaurantId }) {
             dietFilter === 'all' ||
             (dietFilter === 'veg' && item.isVeg === true) ||
             (dietFilter === 'nonveg' && item.isVeg === false)
-
           const categoryMatches =
             categoryFilter === 'all' || item.category === categoryFilter
-
           return dietMatches && categoryMatches
         })
-
         return { ...order, visibleItems }
       })
       .filter(order => order.visibleItems.length > 0)
@@ -58,7 +56,9 @@ function KitchenDisplay({ restaurantId }) {
   const newOrders = filteredOrders.filter(o => o.status === 'new')
   const preparingOrders = filteredOrders.filter(o => o.status === 'preparing')
   const readyOrders = filteredOrders.filter(o => o.status === 'ready')
-  const urgentCount = orders.filter(order => Date.now() - new Date(order.createdAt).getTime() >= URGENT_AFTER_MS).length
+  const urgentCount = orders.filter(order =>
+    Date.now() - new Date(order.createdAt).getTime() >= URGENT_AFTER_MS
+  ).length
 
   const columns = [
     { key: 'new', label: 'New', color: 'var(--red)', orders: newOrders },
@@ -84,6 +84,7 @@ function KitchenDisplay({ restaurantId }) {
         gap: '12px'
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+          {/* Dynamic restaurant name — no more hardcoded value */}
           <span style={{
             fontSize: '13px',
             fontWeight: '700',
@@ -91,7 +92,7 @@ function KitchenDisplay({ restaurantId }) {
             letterSpacing: '1px',
             textTransform: 'uppercase'
           }}>
-            Tadka Junction
+            {restaurantName || 'Kitchen'}
           </span>
           <span style={{ color: 'var(--text3)' }}>|</span>
           <span style={{ fontSize: '15px', fontWeight: '600', color: 'var(--text)' }}>
@@ -195,7 +196,7 @@ function KitchenDisplay({ restaurantId }) {
 
           <select
             value={categoryFilter}
-            onChange={(event) => setCategoryFilter(event.target.value)}
+            onChange={(e) => setCategoryFilter(e.target.value)}
             style={selectStyle}
           >
             <option value="all">All categories</option>
@@ -218,13 +219,9 @@ function KitchenDisplay({ restaurantId }) {
 
       {orders.length === 0 && (
         <div style={{
-          flex: '1',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: '12px',
-          padding: '32px'
+          flex: '1', display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center',
+          gap: '12px', padding: '32px'
         }}>
           <div style={{ fontSize: '48px', opacity: '0.35' }}>No tickets</div>
           <p style={{ color: 'var(--text3)', fontSize: '18px' }}>No active orders</p>
@@ -236,10 +233,8 @@ function KitchenDisplay({ restaurantId }) {
 
       {orders.length > 0 && filteredOrders.length === 0 && (
         <div style={{
-          padding: '28px 16px',
-          color: 'var(--text3)',
-          textAlign: 'center',
-          borderBottom: '1px solid rgba(255,255,255,0.06)'
+          padding: '28px 16px', color: 'var(--text3)',
+          textAlign: 'center', borderBottom: '1px solid rgba(255,255,255,0.06)'
         }}>
           No orders match the current filters.
         </div>
@@ -248,75 +243,48 @@ function KitchenDisplay({ restaurantId }) {
       <div className="kitchen-columns" style={{
         display: 'grid',
         gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-        gap: '14px',
-        padding: '16px',
-        flex: '1',
-        minHeight: 0
+        gap: '14px', padding: '16px', flex: '1', minHeight: 0
       }}>
         {columns.map(col => (
           <div key={col.key} style={{
-            background: 'var(--bg2)',
-            borderRadius: '8px',
-            overflow: 'hidden',
-            display: 'flex',
-            flexDirection: 'column',
-            maxHeight: 'calc(100vh - 184px)',
-            minHeight: '280px'
+            background: 'var(--bg2)', borderRadius: '8px',
+            overflow: 'hidden', display: 'flex', flexDirection: 'column',
+            maxHeight: 'calc(100vh - 184px)', minHeight: '280px'
           }}>
             <div style={{
-              padding: '14px 16px',
-              borderBottom: '1px solid rgba(255,255,255,0.05)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between'
+              padding: '14px 16px', borderBottom: '1px solid rgba(255,255,255,0.05)',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between'
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span style={{
-                  width: '10px',
-                  height: '10px',
-                  borderRadius: '50%',
-                  background: col.color,
-                  boxShadow: `0 0 8px ${col.color}`
+                  width: '10px', height: '10px', borderRadius: '50%',
+                  background: col.color, boxShadow: `0 0 8px ${col.color}`
                 }} />
                 <span style={{
-                  fontSize: '13px',
-                  fontWeight: '700',
-                  color: col.color,
-                  letterSpacing: '0.5px',
-                  textTransform: 'uppercase'
+                  fontSize: '13px', fontWeight: '700', color: col.color,
+                  letterSpacing: '0.5px', textTransform: 'uppercase'
                 }}>
                   {col.label}
                 </span>
               </div>
               <span style={{
-                background: 'var(--bg3)',
-                borderRadius: '8px',
-                padding: '3px 10px',
-                fontSize: '12px',
-                fontWeight: '700',
-                color: 'var(--text2)'
+                background: 'var(--bg3)', borderRadius: '8px',
+                padding: '3px 10px', fontSize: '12px',
+                fontWeight: '700', color: 'var(--text2)'
               }}>
                 {col.orders.length}
               </span>
             </div>
 
             <div style={{
-              flex: '1',
-              overflowY: 'auto',
-              padding: '12px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '10px'
+              flex: '1', overflowY: 'auto', padding: '12px',
+              display: 'flex', flexDirection: 'column', gap: '10px'
             }}>
               {col.orders.length === 0 ? (
                 <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: '34px 20px',
-                  color: 'var(--text3)',
-                  fontSize: '12px',
-                  textAlign: 'center'
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  padding: '34px 20px', color: 'var(--text3)',
+                  fontSize: '12px', textAlign: 'center'
                 }}>
                   No {col.label.toLowerCase()} orders
                 </div>
@@ -343,9 +311,7 @@ function KitchenDisplay({ restaurantId }) {
         @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.4} }
         @keyframes shimmer { 0%{opacity:0} 50%{opacity:1} 100%{opacity:0} }
         @media (max-width: 980px) {
-          .kitchen-columns {
-            grid-template-columns: 1fr !important;
-          }
+          .kitchen-columns { grid-template-columns: 1fr !important; }
         }
       `}</style>
     </div>
@@ -355,57 +321,36 @@ function KitchenDisplay({ restaurantId }) {
 const topButtonStyle = (color) => ({
   background: 'var(--bg3)',
   border: `1px solid ${color === 'var(--text3)' ? 'rgba(90,79,69,0.3)' : 'rgba(184,135,70,0.2)'}`,
-  borderRadius: '8px',
-  padding: '9px 12px',
-  color,
-  fontSize: '12px',
-  fontWeight: '600',
-  cursor: 'pointer',
+  borderRadius: '8px', padding: '9px 12px', color,
+  fontSize: '12px', fontWeight: '600', cursor: 'pointer',
   fontFamily: "'Space Grotesk', sans-serif",
 })
 
 const filterLabelStyle = {
-  color: 'var(--text3)',
-  fontSize: '11px',
-  fontWeight: '700',
-  letterSpacing: '0.8px',
-  textTransform: 'uppercase',
+  color: 'var(--text3)', fontSize: '11px', fontWeight: '700',
+  letterSpacing: '0.8px', textTransform: 'uppercase',
 }
 
 const filterButtonStyle = (active) => ({
   background: active ? 'rgba(184,135,70,0.16)' : 'var(--bg3)',
   border: active ? '1px solid rgba(184,135,70,0.45)' : '1px solid rgba(255,255,255,0.06)',
-  borderRadius: '8px',
-  color: active ? 'var(--gold-l)' : 'var(--text2)',
-  cursor: 'pointer',
-  fontFamily: "'Space Grotesk', sans-serif",
-  fontSize: '12px',
-  fontWeight: '700',
-  padding: '8px 11px',
+  borderRadius: '8px', color: active ? 'var(--gold-l)' : 'var(--text2)',
+  cursor: 'pointer', fontFamily: "'Space Grotesk', sans-serif",
+  fontSize: '12px', fontWeight: '700', padding: '8px 11px',
 })
 
 const selectStyle = {
-  background: 'var(--bg3)',
-  border: '1px solid rgba(255,255,255,0.08)',
-  borderRadius: '8px',
-  color: 'var(--text2)',
-  cursor: 'pointer',
-  fontFamily: "'Space Grotesk', sans-serif",
-  fontSize: '12px',
-  fontWeight: '600',
-  padding: '8px 11px',
+  background: 'var(--bg3)', border: '1px solid rgba(255,255,255,0.08)',
+  borderRadius: '8px', color: 'var(--text2)', cursor: 'pointer',
+  fontFamily: "'Space Grotesk', sans-serif", fontSize: '12px',
+  fontWeight: '600', padding: '8px 11px',
 }
 
 const clearButtonStyle = {
-  background: 'transparent',
-  border: '1px solid rgba(231,76,60,0.25)',
-  borderRadius: '8px',
-  color: 'var(--red)',
-  cursor: 'pointer',
-  fontFamily: "'Space Grotesk', sans-serif",
-  fontSize: '12px',
-  fontWeight: '700',
-  padding: '8px 11px',
+  background: 'transparent', border: '1px solid rgba(231,76,60,0.25)',
+  borderRadius: '8px', color: 'var(--red)', cursor: 'pointer',
+  fontFamily: "'Space Grotesk', sans-serif", fontSize: '12px',
+  fontWeight: '700', padding: '8px 11px',
 }
 
 export default KitchenDisplay
