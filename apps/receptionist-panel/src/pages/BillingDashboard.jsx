@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import TableCard from '../components/TableCard'
-import DailyReport from '../components/DailyReport'
+import DailyReport from "../components/dailyreport";
 import { useBilling } from '../hooks/useBilling'
 
 const formatDateTime = (value) => {
