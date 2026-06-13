@@ -9,7 +9,7 @@ import StaffManagement from './pages/StaffManagement'
 import RestaurantSettings from './pages/RestaurantSettings'
 import SuperAdmin from './pages/SuperAdmin'
 import SetupWizard from './pages/SetupWizard'
-import Sidebar from './components/Sidebar'
+import Sidebar from './components/sidebar'
 import api from './lib/api'
 
 function CenterMessage({ title, body, logout }) {
