@@ -33,6 +33,7 @@ function App() {
   const { user, role, restaurantId, platformAdmin, loading, logout } = useAuth()
   const [currentRestaurant, setCurrentRestaurant] = useState(null)
   const [restaurantLoading, setRestaurantLoading] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
 
   useEffect(() => {
     if (!user || !restaurantId) {
@@ -54,9 +55,7 @@ function App() {
         if (!cancelled) setRestaurantLoading(false)
       })
 
-    return () => {
-      cancelled = true
-    }
+    return () => { cancelled = true }
   }, [user, restaurantId])
 
   if (loading) {
@@ -73,23 +72,11 @@ function App() {
   if (!user) return <Login />
 
   if (role !== 'admin' && !platformAdmin) {
-    return (
-      <CenterMessage
-        title="Access Denied"
-        body="This panel is for admins only."
-        logout={logout}
-      />
-    )
+    return <CenterMessage title="Access Denied" body="This panel is for admins only." logout={logout} />
   }
 
   if (!platformAdmin && !restaurantId) {
-    return (
-      <CenterMessage
-        title="Restaurant not assigned"
-        body="This admin user needs a restaurantId claim before opening restaurant operations."
-        logout={logout}
-      />
-    )
+    return <CenterMessage title="Restaurant not assigned" body="This admin user needs a restaurantId claim before opening restaurant operations." logout={logout} />
   }
 
   if (!platformAdmin && restaurantLoading) {
@@ -104,38 +91,75 @@ function App() {
   }
 
   if (!platformAdmin && !currentRestaurant) {
-    return (
-      <CenterMessage
-        title="Restaurant not found"
-        body="The restaurant attached to this account could not be loaded."
-        logout={logout}
-      />
-    )
+    return <CenterMessage title="Restaurant not found" body="The restaurant attached to this account could not be loaded." logout={logout} />
   }
 
-  const shellRestaurant = currentRestaurant || {
-    id: 'platform',
-    name: 'Platform Admin',
-    themeColor: '#FF6B35',
-  }
+  const shellRestaurant = currentRestaurant || { id: 'platform', name: 'Platform Admin', themeColor: '#FF6B35' }
   const needsSetup = currentRestaurant?.onboardingCompleted === false
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
-      <Sidebar restaurant={shellRestaurant} />
-      <div className="flex-1 ml-64">
-        <Routes>
-          <Route path="/" element={<Navigate to={platformAdmin ? '/super-admin' : needsSetup ? '/setup' : '/dashboard'} />} />
-          <Route path="/setup" element={currentRestaurant ? <SetupWizard restaurant={currentRestaurant} setRestaurant={setCurrentRestaurant} /> : <Navigate to="/super-admin" />} />
-          <Route path="/dashboard" element={currentRestaurant ? (needsSetup ? <Navigate to="/setup" /> : <Dashboard restaurant={currentRestaurant} />) : <Navigate to="/super-admin" />} />
-          <Route path="/menu" element={currentRestaurant ? (needsSetup ? <Navigate to="/setup" /> : <MenuManager restaurant={currentRestaurant} />) : <Navigate to="/super-admin" />} />
-          <Route path="/tables" element={currentRestaurant ? (needsSetup ? <Navigate to="/setup" /> : <TableManager restaurant={currentRestaurant} />) : <Navigate to="/super-admin" />} />
-          <Route path="/staff" element={currentRestaurant ? (needsSetup ? <Navigate to="/setup" /> : <StaffManagement restaurant={currentRestaurant} />) : <Navigate to="/super-admin" />} />
-          <Route path="/settings" element={currentRestaurant ? <RestaurantSettings restaurant={currentRestaurant} setRestaurant={setCurrentRestaurant} /> : <Navigate to="/super-admin" />} />
-          <Route path="/super-admin" element={platformAdmin ? <SuperAdmin /> : <Navigate to="/dashboard" />} />
-        </Routes>
+    <>
+      <style>{`
+        * { box-sizing: border-box; }
+        body { margin: 0; overflow-x: hidden; }
+        .app-layout { display: flex; min-height: 100vh; width: 100%; }
+        .main-area {
+          flex: 1;
+          margin-left: 256px;
+          min-width: 0;
+          max-width: 100%;
+        }
+        .hamburger-btn { display: none; }
+
+        @media (max-width: 768px) {
+          .main-area { margin-left: 0; width: 100%; }
+          .hamburger-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: fixed;
+            top: 12px;
+            left: 12px;
+            z-index: 80;
+            width: 40px;
+            height: 40px;
+            background: #111827;
+            border: 1px solid #374151;
+            border-radius: 10px;
+            cursor: pointer;
+            color: white;
+            font-size: 18px;
+          }
+          .main-area { padding-top: 64px; }
+        }
+      `}</style>
+
+      <div className="app-layout">
+        {/* Hamburger button — mobile only */}
+        <button className="hamburger-btn" onClick={() => setSidebarOpen(true)}>
+          ☰
+        </button>
+
+        <Sidebar
+          restaurant={shellRestaurant}
+          isOpen={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+        />
+
+        <div className="main-area">
+          <Routes>
+            <Route path="/" element={<Navigate to={platformAdmin ? '/super-admin' : needsSetup ? '/setup' : '/dashboard'} />} />
+            <Route path="/setup" element={currentRestaurant ? <SetupWizard restaurant={currentRestaurant} setRestaurant={setCurrentRestaurant} /> : <Navigate to="/super-admin" />} />
+            <Route path="/dashboard" element={currentRestaurant ? (needsSetup ? <Navigate to="/setup" /> : <Dashboard restaurant={currentRestaurant} />) : <Navigate to="/super-admin" />} />
+            <Route path="/menu" element={currentRestaurant ? (needsSetup ? <Navigate to="/setup" /> : <MenuManager restaurant={currentRestaurant} />) : <Navigate to="/super-admin" />} />
+            <Route path="/tables" element={currentRestaurant ? (needsSetup ? <Navigate to="/setup" /> : <TableManager restaurant={currentRestaurant} />) : <Navigate to="/super-admin" />} />
+            <Route path="/staff" element={currentRestaurant ? (needsSetup ? <Navigate to="/setup" /> : <StaffManagement restaurant={currentRestaurant} />) : <Navigate to="/super-admin" />} />
+            <Route path="/settings" element={currentRestaurant ? <RestaurantSettings restaurant={currentRestaurant} setRestaurant={setCurrentRestaurant} /> : <Navigate to="/super-admin" />} />
+            <Route path="/super-admin" element={platformAdmin ? <SuperAdmin /> : <Navigate to="/dashboard" />} />
+          </Routes>
+        </div>
       </div>
-    </div>
+    </>
   )
 }
 
