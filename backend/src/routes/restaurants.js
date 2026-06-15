@@ -25,7 +25,6 @@ router.get(
   }
 );
 
-// GET /api/restaurants/:restaurantId — PUBLIC
 router.get("/:restaurantId", async (req, res) => {
   try {
     const { restaurantId } = req.params;
@@ -33,9 +32,11 @@ router.get("/:restaurantId", async (req, res) => {
     if (!restaurant) {
       return res.status(404).json({ success: false, error: "Restaurant not found" });
     }
-    res.json({ success: true, restaurant });
+    // Sensitive fields hata do public response se
+    const { ownerEmail, subscription, ...publicData } = restaurant;
+    res.json({ success: true, restaurant: publicData });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    res.status(500).json({ success: false, error: "Something went wrong" });
   }
 });
 
