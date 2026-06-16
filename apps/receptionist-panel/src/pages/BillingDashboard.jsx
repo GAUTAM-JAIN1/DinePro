@@ -58,13 +58,16 @@ function BillingDashboard({ restaurantId }) {
   const {
     tableGroups, history, connected, closeBill, markItemServed, stats,
     waiterAlerts, dismissWaiterAlert, restaurant,
-    cancelOrder,  // ← Task: cancelOrder added
+    cancelOrder,
+    resetStats,
   } = useBilling(restaurantId)
 
-  const [searchTerm,   setSearchTerm]   = useState('')
-  const [statusFilter, setStatusFilter] = useState('all')
-  const [activeView,   setActiveView]   = useState('live')
-  const [showReport,   setShowReport]   = useState(false)
+  const [searchTerm,    setSearchTerm]   = useState('')
+  const [statusFilter,  setStatusFilter] = useState('all')
+  const [activeView,    setActiveView]   = useState('live')
+  const [showReport,    setShowReport]   = useState(false)
+  const [resetting,     setResetting]    = useState(false)
+  const [showResetConfirm, setShowResetConfirm] = useState(false)
 
   const liveTables     = useMemo(() => Object.values(tableGroups), [tableGroups])
   const tables         = liveTables
@@ -96,6 +99,13 @@ function BillingDashboard({ restaurantId }) {
     { key: 'served',    label: 'Served'    },
   ]
 
+  const handleReset = async () => {
+    setResetting(true)
+    await resetStats()
+    setResetting(false)
+    setShowResetConfirm(false)
+  }
+
   return (
     <div className="min-h-screen bg-[var(--bg)] text-[var(--text)]">
       <header className="sticky top-0 z-30 border-b border-[rgba(184,135,70,0.16)] bg-[rgba(255,253,249,0.92)] backdrop-blur-xl">
@@ -120,6 +130,14 @@ function BillingDashboard({ restaurantId }) {
                 title="View daily report"
               >
                 📊 Daily Report
+              </button>
+
+              <button
+                onClick={() => setShowResetConfirm(true)}
+                className="filter-button"
+                title="Reset today's revenue counter"
+              >
+                🔄 Reset Revenue
               </button>
 
               <div className={`inline-flex w-fit items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold ${
@@ -265,7 +283,7 @@ function BillingDashboard({ restaurantId }) {
                 tableGroup={tableGroup}
                 onCloseBill={closeBill}
                 onMarkItemServed={markItemServed}
-                onCancelOrder={cancelOrder}  // ← cancelOrder prop passed
+                onCancelOrder={cancelOrder}
                 restaurant={restaurant}
               />
             ))}
@@ -279,6 +297,59 @@ function BillingDashboard({ restaurantId }) {
           restaurantName={restaurant?.name || 'Restaurant'}
           onClose={() => setShowReport(false)}
         />
+      )}
+
+      {/* Reset Confirm Modal */}
+      {showResetConfirm && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 50,
+          background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(4px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: '16px',
+        }}>
+          <div style={{
+            background: 'var(--card)', borderRadius: '20px',
+            padding: '28px 24px', maxWidth: '360px', width: '100%',
+            border: '1px solid rgba(184,135,70,0.18)',
+            boxShadow: '0 20px 60px rgba(0,0,0,0.15)',
+            textAlign: 'center',
+          }}>
+            <div style={{ fontSize: '40px', marginBottom: '12px' }}>🔄</div>
+            <h2 style={{ margin: '0 0 8px', fontSize: '18px', fontWeight: '700', color: 'var(--text)' }}>
+              Reset Today's Revenue?
+            </h2>
+            <p style={{ margin: '0 0 24px', fontSize: '14px', color: 'var(--text2)', lineHeight: '1.5' }}>
+              This will reset the revenue counter to ₹0. Past orders won't be deleted — only the today's count will restart.
+            </p>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                onClick={() => setShowResetConfirm(false)}
+                style={{
+                  flex: 1, padding: '12px', borderRadius: '12px',
+                  border: '1px solid rgba(184,135,70,0.25)',
+                  background: 'transparent', color: 'var(--text2)',
+                  fontSize: '14px', fontWeight: '600', cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleReset}
+                disabled={resetting}
+                style={{
+                  flex: 1, padding: '12px', borderRadius: '12px',
+                  border: 'none',
+                  background: 'linear-gradient(135deg, #2B1A0D, #5B3A1A)',
+                  color: '#fff', fontSize: '14px', fontWeight: '600',
+                  cursor: resetting ? 'not-allowed' : 'pointer',
+                  opacity: resetting ? 0.7 : 1,
+                }}
+              >
+                {resetting ? 'Resetting...' : 'Yes, Reset'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       <style>{`

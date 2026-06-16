@@ -6,6 +6,7 @@ const {
   getRestaurantOrders,
   getOrderHistory,
   getDailyStats,
+  resetDailyStats,
   getDailyReport,
 } = require('../services/orderService')
 const { verifyToken, requireRole } = require('../middleware/auth')
@@ -41,6 +42,20 @@ router.get(
     try {
       const stats = await getDailyStats(req.params.restaurantId)
       res.json({ success: true, stats })
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message })
+    }
+  }
+)
+
+// POST /api/orders/:restaurantId/stats/reset — ADMIN + RECEPTIONIST
+router.post(
+  '/:restaurantId/stats/reset',
+  verifyToken, requireRole('admin', 'receptionist'), requireRestaurantAccess, requireActiveSubscription,
+  async (req, res) => {
+    try {
+      const result = await resetDailyStats(req.params.restaurantId)
+      res.json({ success: true, ...result })
     } catch (err) {
       res.status(500).json({ success: false, error: err.message })
     }

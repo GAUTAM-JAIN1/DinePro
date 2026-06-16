@@ -116,7 +116,6 @@ export function useBilling(restaurantId) {
       fetchHistory()
     })
 
-    // Cancel order — dono panels se hata do
     socket.on('order_cancelled', ({ orderId }) => {
       setOrders(prev => prev.filter(o => o.id !== orderId))
     })
@@ -210,17 +209,26 @@ export function useBilling(restaurantId) {
     )
   }, [restaurantId])
 
-  // Cancel order — socket emit + local state update
   const cancelOrder = useCallback((orderId, tableNumber, reason = '') => {
     const socket = getSocket()
     socket.emit('cancel_order', { restaurantId, orderId, reason })
-    // Optimistically remove from local state
     setOrders(prev => prev.filter(o => o.id !== orderId))
   }, [restaurantId])
 
   const dismissWaiterAlert = useCallback((alertId) => {
     setWaiterAlerts(prev => prev.filter(a => a.id !== alertId))
   }, [])
+
+  // Manual reset daily stats
+  const resetStats = useCallback(async () => {
+    try {
+      const headers = await getAuthHeaders()
+      await axios.post(`${BACKEND_URL}/api/orders/${restaurantId}/stats/reset`, {}, { headers })
+      setStats({ dailyRevenue: 0, completedOrdersToday: 0 })
+    } catch (err) {
+      console.error('Failed to reset stats:', err)
+    }
+  }, [restaurantId])
 
   const tableGroups = orders.reduce((groups, order) => {
     const table = order.tableNumber
@@ -250,5 +258,6 @@ export function useBilling(restaurantId) {
     markItemServed,
     cancelOrder,
     dismissWaiterAlert,
+    resetStats,
   }
 }

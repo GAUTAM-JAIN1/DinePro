@@ -288,15 +288,37 @@ const closeBill = async (restaurantId, tableNumber, orderIds, settlementOptions 
 }
 
 const getDailyStats = async (restaurantId) => {
+  // Check if manual reset exists for today
+  const restRef = db.collection('restaurants').doc(restaurantId)
+  const restDoc = await restRef.get()
+  const resetAt = restDoc.exists ? restDoc.data()?.statsResetAt : null
+
   const snap = await orderCol(restaurantId).where('status', '==', 'closed').get()
   const allClosed = snap.docs.map(d => d.data())
-  const todayClosed = allClosed.filter(o => isToday(o.closedAt))
-  const todayCompleted = allClosed.filter(o => isToday(o.completedAt))
+
+  const todayClosed = allClosed.filter(o => {
+    if (!isToday(o.closedAt)) return false
+    if (resetAt && new Date(o.closedAt) < new Date(resetAt)) return false
+    return true
+  })
+
+  const todayCompleted = allClosed.filter(o => {
+    if (!isToday(o.completedAt)) return false
+    if (resetAt && new Date(o.completedAt) < new Date(resetAt)) return false
+    return true
+  })
 
   return {
     dailyRevenue: todayClosed.reduce((sum, o) => sum + (o.settledAmount ?? o.totalAmount), 0),
     completedOrdersToday: todayCompleted.length,
   }
+}
+
+const resetDailyStats = async (restaurantId) => {
+  const restRef = db.collection('restaurants').doc(restaurantId)
+  const now = new Date().toISOString()
+  await restRef.update({ statsResetAt: now })
+  return { resetAt: now }
 }
 
 const getOrderHistory = async (restaurantId, limit = 50) => {
@@ -356,7 +378,6 @@ const getDailyReport = async (restaurantId) => {
   }
 }
 
-// Cancel order — receptionist cancels, chef panel se bhi hata do
 const cancelOrder = async (restaurantId, orderId, reason = '') => {
   const ref = orderCol(restaurantId).doc(orderId)
   const doc = await ref.get()
@@ -383,6 +404,7 @@ module.exports = {
   getOrderHistory,
   closeBill,
   getDailyStats,
+  resetDailyStats,
   getDailyReport,
   cancelOrder,
 }
