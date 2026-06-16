@@ -35,8 +35,14 @@ function App() {
   const [restaurantLoading, setRestaurantLoading] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
+  // Platform admin can select a restaurant to manage
+  const [selectedRestaurantId, setSelectedRestaurantId] = useState(null)
+
+  // Determine which restaurantId to use
+  const activeRestaurantId = platformAdmin ? selectedRestaurantId : restaurantId
+
   useEffect(() => {
-    if (!user || !restaurantId) {
+    if (!user || !activeRestaurantId) {
       setCurrentRestaurant(null)
       return
     }
@@ -44,7 +50,7 @@ function App() {
     let cancelled = false
     setRestaurantLoading(true)
 
-    api.get(`/api/restaurants/${restaurantId}`)
+    api.get(`/api/restaurants/${activeRestaurantId}`)
       .then((res) => {
         if (!cancelled) setCurrentRestaurant(res.data.restaurant)
       })
@@ -56,7 +62,7 @@ function App() {
       })
 
     return () => { cancelled = true }
-  }, [user, restaurantId])
+  }, [user, activeRestaurantId])
 
   if (loading) {
     return (
@@ -144,18 +150,39 @@ function App() {
           restaurant={shellRestaurant}
           isOpen={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
+          platformAdmin={platformAdmin}
+          onBackToSuperAdmin={platformAdmin ? () => {
+            setSelectedRestaurantId(null)
+            setCurrentRestaurant(null)
+          } : null}
         />
 
         <div className="main-area">
           <Routes>
-            <Route path="/" element={<Navigate to={platformAdmin ? '/super-admin' : needsSetup ? '/setup' : '/dashboard'} />} />
+            <Route
+              path="/"
+              element={
+                <Navigate to={
+                  platformAdmin
+                    ? (selectedRestaurantId ? '/dashboard' : '/super-admin')
+                    : (needsSetup ? '/setup' : '/dashboard')
+                } />
+              }
+            />
+            <Route
+              path="/super-admin"
+              element={
+                platformAdmin
+                  ? <SuperAdmin onManageRestaurant={(id) => setSelectedRestaurantId(id)} />
+                  : <Navigate to="/dashboard" />
+              }
+            />
             <Route path="/setup" element={currentRestaurant ? <SetupWizard restaurant={currentRestaurant} setRestaurant={setCurrentRestaurant} /> : <Navigate to="/super-admin" />} />
             <Route path="/dashboard" element={currentRestaurant ? (needsSetup ? <Navigate to="/setup" /> : <Dashboard restaurant={currentRestaurant} />) : <Navigate to="/super-admin" />} />
             <Route path="/menu" element={currentRestaurant ? (needsSetup ? <Navigate to="/setup" /> : <MenuManager restaurant={currentRestaurant} />) : <Navigate to="/super-admin" />} />
             <Route path="/tables" element={currentRestaurant ? (needsSetup ? <Navigate to="/setup" /> : <TableManager restaurant={currentRestaurant} />) : <Navigate to="/super-admin" />} />
             <Route path="/staff" element={currentRestaurant ? (needsSetup ? <Navigate to="/setup" /> : <StaffManagement restaurant={currentRestaurant} />) : <Navigate to="/super-admin" />} />
             <Route path="/settings" element={currentRestaurant ? <RestaurantSettings restaurant={currentRestaurant} setRestaurant={setCurrentRestaurant} /> : <Navigate to="/super-admin" />} />
-            <Route path="/super-admin" element={platformAdmin ? <SuperAdmin /> : <Navigate to="/dashboard" />} />
           </Routes>
         </div>
       </div>

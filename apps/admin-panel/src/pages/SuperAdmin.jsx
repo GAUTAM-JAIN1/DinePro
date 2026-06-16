@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import toast, { Toaster } from 'react-hot-toast'
 import api from '../lib/api'
 
@@ -18,7 +19,8 @@ const statusClasses = {
   suspended: 'bg-gray-200 text-gray-700',
 }
 
-function SuperAdmin() {
+function SuperAdmin({ onManageRestaurant }) {
+  const navigate = useNavigate()
   const [restaurants, setRestaurants] = useState([])
   const [loading, setLoading] = useState(true)
   const [savingId, setSavingId] = useState(null)
@@ -86,6 +88,11 @@ function SuperAdmin() {
     } finally {
       setSavingId(null)
     }
+  }
+
+  const handleManage = (restaurant) => {
+    onManageRestaurant(restaurant.id)
+    navigate('/dashboard')
   }
 
   return (
@@ -220,6 +227,12 @@ function SuperAdmin() {
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex flex-wrap gap-2">
+                        <button
+                          onClick={() => handleManage(restaurant)}
+                          className="rounded-lg bg-orange-500 px-3 py-2 text-xs font-semibold text-white transition hover:bg-orange-600"
+                        >
+                          Manage
+                        </button>
                         <button
                           onClick={() => runAction(restaurant, 'markPaid', 30)}
                           disabled={savingId === `${restaurant.id}-markPaid`}
