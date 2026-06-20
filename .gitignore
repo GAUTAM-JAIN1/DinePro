@@ -31,3 +31,7 @@ desktop.ini
 *.log
 npm-debug.log*
 yarn-error.log
+# Temporary debug/dump files
+code_dump.txt
+*_dump.txt
+original_*.txt
