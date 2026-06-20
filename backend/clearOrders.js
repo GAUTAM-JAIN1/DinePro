@@ -1,8 +1,15 @@
 require('dotenv').config()
 const { db } = require('./src/services/firebaseAdmin')
 
-// Yahan apne dono restaurant IDs daal de
-const RESTAURANT_IDS = ['rest_001', 'rest_1781589726775']
+// Command line arguments se restaurant IDs lo
+// Usage: node clearOrders.js rest_001 rest_1781589726775
+// Agar koi argument nahi diya, toh saare restaurants ke orders clear honge
+const argIds = process.argv.slice(2)
+
+async function getAllRestaurantIds() {
+  const snap = await db.collection('restaurants').get()
+  return snap.docs.map((doc) => doc.id)
+}
 
 async function deleteAllOrders(restaurantId) {
   const ordersRef = db.collection('restaurants').doc(restaurantId).collection('orders')
@@ -24,11 +31,25 @@ async function deleteAllOrders(restaurantId) {
 }
 
 async function run() {
+  let restaurantIds = argIds
+
+  if (restaurantIds.length === 0) {
+    console.log('Koi restaurant ID nahi diya gaya — saare restaurants ke orders clear honge.\n')
+    restaurantIds = await getAllRestaurantIds()
+    if (restaurantIds.length === 0) {
+      console.log('Koi restaurant nahi mila Firestore mein.')
+      return
+    }
+    console.log(`Found ${restaurantIds.length} restaurants: ${restaurantIds.join(', ')}\n`)
+  } else {
+    console.log(`Clearing orders for: ${restaurantIds.join(', ')}\n`)
+  }
+
   let total = 0
-  for (const restaurantId of RESTAURANT_IDS) {
+  for (const restaurantId of restaurantIds) {
     total += await deleteAllOrders(restaurantId)
   }
-  console.log(`\nTotal ${total} orders delete hue dono restaurants se.`)
+  console.log(`\nTotal ${total} orders delete hue.`)
 }
 
 run()
