@@ -54,7 +54,57 @@ function WaiterAlertBanner({ alerts, onDismiss }) {
   )
 }
 
-function BillingDashboard({ restaurantId }) {
+function AccountMenu({ userEmail, onLogout }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        type="button"
+        onClick={() => setOpen(p => !p)}
+        className="filter-button"
+        title="Account"
+      >
+        👤 {userEmail ? userEmail.split('@')[0] : 'Account'}
+      </button>
+      {open && (
+        <>
+          <div
+            onClick={() => setOpen(false)}
+            style={{ position: 'fixed', inset: 0, zIndex: 40 }}
+          />
+          <div style={{
+            position: 'absolute', top: 'calc(100% + 6px)', right: 0,
+            background: 'var(--card)', border: '1px solid rgba(184,135,70,0.18)',
+            borderRadius: '12px', minWidth: '190px', zIndex: 50,
+            boxShadow: '0 10px 30px rgba(0,0,0,0.12)', overflow: 'hidden',
+          }}>
+            {userEmail && (
+              <div style={{
+                padding: '10px 14px', fontSize: '11px', color: 'var(--text2)',
+                borderBottom: '1px solid rgba(184,135,70,0.12)', wordBreak: 'break-all',
+              }}>
+                {userEmail}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={onLogout}
+              style={{
+                width: '100%', textAlign: 'left', background: 'none', border: 'none',
+                color: '#dc2626', fontSize: '13px', fontWeight: '600',
+                padding: '12px 14px', cursor: 'pointer', fontFamily: 'inherit',
+              }}
+            >
+              🚪 Sign out
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function BillingDashboard({ restaurantId, onLogout, userEmail }) {
   const {
     tableGroups, history, connected, closeBill, markItemServed, stats,
     waiterAlerts, dismissWaiterAlert, restaurant,
@@ -148,6 +198,8 @@ function BillingDashboard({ restaurantId }) {
                 <span className={`h-2.5 w-2.5 rounded-full ${connected ? 'bg-emerald-500' : 'bg-rose-500'}`} />
                 {connected ? 'Live sync' : 'Reconnecting'}
               </div>
+
+              <AccountMenu userEmail={userEmail} onLogout={onLogout} />
             </div>
           </div>
 

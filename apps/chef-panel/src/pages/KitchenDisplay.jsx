@@ -5,10 +5,11 @@ import OrderTicket from '../components/OrderTicket'
 const URGENT_AFTER_MS = 15 * 60 * 1000
 
 // restaurantName prop added — no more hardcoded "Tadka Junction"
-function KitchenDisplay({ restaurantId, restaurantName }) {
+function KitchenDisplay({ restaurantId, restaurantName, onLogout, userEmail }) {
   const [soundOn, setSoundOn] = useState(true)
   const [dietFilter, setDietFilter] = useState('all')
   const [categoryFilter, setCategoryFilter] = useState('all')
+  const [showAccountMenu, setShowAccountMenu] = useState(false)
 
   const {
     orders,
@@ -164,6 +165,51 @@ function KitchenDisplay({ restaurantId, restaurantName }) {
           >
             {soundOn ? 'Sound on' : 'Sound off'}
           </button>
+
+          {/* Account / Logout */}
+          <div style={{ position: 'relative' }}>
+            <button
+              type="button"
+              onClick={() => setShowAccountMenu(p => !p)}
+              style={topButtonStyle('var(--text2)')}
+            >
+              👤 {userEmail ? userEmail.split('@')[0] : 'Account'}
+            </button>
+            {showAccountMenu && (
+              <>
+                <div
+                  onClick={() => setShowAccountMenu(false)}
+                  style={{ position: 'fixed', inset: 0, zIndex: 40 }}
+                />
+                <div style={{
+                  position: 'absolute', top: 'calc(100% + 6px)', right: 0,
+                  background: 'var(--bg3)', border: '1px solid rgba(184,135,70,0.2)',
+                  borderRadius: '10px', minWidth: '180px', zIndex: 50,
+                  boxShadow: '0 10px 30px rgba(0,0,0,0.4)', overflow: 'hidden',
+                }}>
+                  {userEmail && (
+                    <div style={{
+                      padding: '10px 14px', fontSize: '11px', color: 'var(--text3)',
+                      borderBottom: '1px solid rgba(255,255,255,0.06)', wordBreak: 'break-all',
+                    }}>
+                      {userEmail}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={onLogout}
+                    style={{
+                      width: '100%', textAlign: 'left', background: 'none', border: 'none',
+                      color: 'var(--red)', fontSize: '13px', fontWeight: '600',
+                      padding: '12px 14px', cursor: 'pointer', fontFamily: "'Space Grotesk', sans-serif",
+                    }}
+                  >
+                    🚪 Sign out
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
 

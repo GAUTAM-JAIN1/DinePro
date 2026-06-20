@@ -2,33 +2,37 @@ const express = require('express')
 const router = express.Router()
 const multer = require('multer')
 const cloudinary = require('cloudinary').v2
-const { verifyToken, requireRole } = require('../middleware/auth')
+const { verifyToken, requireRole, requirePlatformAdmin } = require('../middleware/auth')
 
-// Configure Cloudinary
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 })
 
-// Multer: memory storage, max 5MB, images only
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
-      cb(null, true)
-    } else {
-      cb(new Error('Only image files are allowed'), false)
-    }
+    if (file.mimetype.startsWith('image/')) cb(null, true)
+    else cb(new Error('Only image files are allowed'), false)
   },
 })
 
-// POST /api/images/upload
+// POST /api/images/upload — admin OR platform admin (superadmin)
 router.post(
   '/upload',
   verifyToken,
-  requireRole('admin'),
+  (req, res, next) => {
+    // admin ya platformAdmin dono allow hain
+    const isAdmin = req.user?.role === 'admin'
+    const isPlatformAdmin =
+      req.user?.platformAdmin === true ||
+      req.user?.superAdmin === true ||
+      req.user?.role === 'superadmin'
+    if (isAdmin || isPlatformAdmin) return next()
+    return res.status(403).json({ success: false, error: 'Insufficient permissions' })
+  },
   upload.single('image'),
   async (req, res) => {
     try {
@@ -41,7 +45,6 @@ router.post(
         return res.status(400).json({ success: false, error: 'restaurantId is required' })
       }
 
-      // Upload to Cloudinary
       const result = await new Promise((resolve, reject) => {
         const stream = cloudinary.uploader.upload_stream(
           {
@@ -49,8 +52,8 @@ router.post(
             resource_type: 'image',
             transformation: [
               { width: 800, height: 600, crop: 'limit' },
-              { quality: 'auto', fetch_format: 'auto' }
-            ]
+              { quality: 'auto', fetch_format: 'auto' },
+            ],
           },
           (error, result) => {
             if (error) reject(error)
@@ -60,11 +63,7 @@ router.post(
         stream.end(req.file.buffer)
       })
 
-      res.json({
-        success: true,
-        url: result.secure_url,
-        publicId: result.public_id,
-      })
+      res.json({ success: true, url: result.secure_url, publicId: result.public_id })
     } catch (err) {
       res.status(500).json({ success: false, error: err.message })
     }

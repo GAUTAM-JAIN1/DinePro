@@ -78,7 +78,7 @@ function App() {
     )
   }
 
-  return <KitchenDisplay restaurantId={restaurantId} restaurantName={restaurantName} />
+  return <KitchenDisplay restaurantId={restaurantId} restaurantName={restaurantName} onLogout={logout} userEmail={user.email} />
 }
 
 const signOutStyle = {

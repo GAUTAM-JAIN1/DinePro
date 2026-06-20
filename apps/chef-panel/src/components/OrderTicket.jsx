@@ -48,7 +48,6 @@ function OrderTicket({ order, visibleItems, onMarkPreparing, onMarkReady, onUpda
   const sendChefMessage = (message) => {
     const trimmed = message.trim()
     if (!trimmed) return
-
     setSentReply(trimmed)
     onSendChefMessage(order, trimmed)
     setCustomMessage('')
@@ -148,7 +147,6 @@ function OrderTicket({ order, visibleItems, onMarkPreparing, onMarkReady, onUpda
                 />
               </div>
             ))}
-
             {previousItems.length > 0 && (
               <>
                 <div style={dividerStyle} />
@@ -157,7 +155,6 @@ function OrderTicket({ order, visibleItems, onMarkPreparing, onMarkReady, onUpda
             )}
           </>
         )}
-
         {previousItems.map((item, i) => (
           <OrderItem
             key={item.lineId || item.id || i}
@@ -242,18 +239,34 @@ function SectionTitle({ children, color }) {
 }
 
 function getElapsedSeconds(createdAt) {
-  const start = new Date(createdAt).getTime()
+  let start
+
+  if (!createdAt) return 0
+
+  // Firestore Timestamp object { seconds, nanoseconds }
+  if (createdAt?.seconds) {
+    start = createdAt.seconds * 1000
+  }
+  // Already a JS Date
+  else if (createdAt instanceof Date) {
+    start = createdAt.getTime()
+  }
+  // ISO string or millisecond number
+  else {
+    start = new Date(createdAt).getTime()
+  }
+
   if (Number.isNaN(start)) return 0
   return Math.max(0, Math.floor((Date.now() - start) / 1000))
 }
 
 function formatElapsed(seconds) {
-  if (seconds < 60) return 'Just now'
+  if (seconds < 60) return `${seconds}s`
   const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes} min ago`
+  if (minutes < 60) return `${minutes} min`
   const hours = Math.floor(minutes / 60)
   const remainingMinutes = minutes % 60
-  return `${hours}h ${remainingMinutes}m ago`
+  return `${hours}h ${remainingMinutes}m`
 }
 
 const urgentBadgeStyle = {

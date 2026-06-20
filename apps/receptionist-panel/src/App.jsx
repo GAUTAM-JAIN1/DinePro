@@ -106,7 +106,7 @@ function App() {
     )
   }
 
-  return <BillingDashboard restaurantId={restaurantId} />
+  return <BillingDashboard restaurantId={restaurantId} onLogout={logout} userEmail={user.email} />
 }
 
 export default App
