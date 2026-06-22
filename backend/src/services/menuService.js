@@ -8,6 +8,8 @@ function normalizeMenuItem(doc) {
     ...data,
     isAvailable: data.isAvailable ?? data.available ?? true,
     sortOrder: data.sortOrder ?? 0,
+    subcategory: data.subcategory ?? '',
+    subcategoryHindi: data.subcategoryHindi ?? '',
   }
 }
 
@@ -40,6 +42,8 @@ async function addMenuItem(restaurantId, itemData) {
     price: Number(itemData.price),
     category: itemData.category || 'Mains',
     categoryHindi: itemData.categoryHindi || '',
+    subcategory: itemData.subcategory || '',
+    subcategoryHindi: itemData.subcategoryHindi || '',
     imageUrl: itemData.imageUrl || '',
     isVeg: itemData.isVeg ?? true,
     isAvailable: itemData.isAvailable ?? true,

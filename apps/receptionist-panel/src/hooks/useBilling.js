@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { io } from 'socket.io-client'
 import axios from 'axios'
 import { auth } from '../firebase'
+import { playAlert } from '../utils/kitchenAlertSound'
 
 const BACKEND_URL = import.meta.env.VITE_API_URL
 
@@ -96,6 +97,8 @@ export function useBilling(restaurantId) {
         if (exists) return prev
         return [orderData, ...prev]
       })
+      // Naya order aane par receptionist ko bhi pata chalna chahiye
+      try { playAlert() } catch (e) { /* ignore */ }
     })
 
     socket.on('order_updated', (orderData) => {
@@ -104,6 +107,8 @@ export function useBilling(restaurantId) {
         if (exists) return prev.map(o => o.id === orderData.id ? orderData : o)
         return [orderData, ...prev]
       })
+      // Customer ne naye items add kiye — yeh bhi alert-worthy hai
+      try { playAlert() } catch (e) { /* ignore */ }
     })
 
     socket.on('status_changed', (updatedOrder) => {
@@ -141,18 +146,7 @@ export function useBilling(restaurantId) {
         return [alert, ...prev]
       })
 
-      try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)()
-        const osc = ctx.createOscillator()
-        const gain = ctx.createGain()
-        osc.connect(gain)
-        gain.connect(ctx.destination)
-        osc.frequency.value = 880
-        gain.gain.setValueAtTime(0.3, ctx.currentTime)
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5)
-        osc.start(ctx.currentTime)
-        osc.stop(ctx.currentTime + 0.5)
-      } catch (_) {}
+      try { playAlert() } catch (e) { /* ignore */ }
 
       setTimeout(() => {
         setWaiterAlerts(prev => prev.filter(a => a.id !== alert.id))

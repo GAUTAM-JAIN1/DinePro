@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { signInWithEmailAndPassword } from 'firebase/auth'
 import { auth } from '../firebase'
+import { unlockAudio } from '../utils/kitchenAlertSound'
 
 function Login() {
   const [email, setEmail] = useState('')
@@ -9,6 +10,9 @@ function Login() {
   const [loading, setLoading] = useState(false)
 
   const handleLogin = async () => {
+    // Yeh click hi browser ka "user gesture" hai — isi se audio permanently unlock ho jaata hai
+    unlockAudio()
+
     setError('')
     setLoading(true)
     try {

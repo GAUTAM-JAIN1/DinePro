@@ -25,7 +25,7 @@ function validate(schema) {
   }
 }
 
-// ─────────────────────── Menu Schemas ───────────────────────
+// ───────────────────────────── Menu Schemas ─────────────────────────────
 
 const coerceNumber = z.union([z.number(), z.string().transform(Number)]).refine(n => !isNaN(n), 'Must be a number')
 const coercePositive = coerceNumber.refine(n => n > 0, 'Must be positive')
@@ -45,6 +45,8 @@ const menuItemCreate = z.object({
   price: coercePositive,
   category: z.string().min(1).default('Mains'),
   categoryHindi: z.string().optional().default(''),
+  subcategory: z.string().optional().default(''),
+  subcategoryHindi: z.string().optional().default(''),
   imageUrl: z.string().optional().default(''),
   isVeg: z.boolean().optional().default(true),
   isAvailable: z.boolean().optional().default(true),
@@ -66,7 +68,7 @@ const menuReorder = z.object({
   ).min(1),
 })
 
-// ─────────────────────── Order Schemas ───────────────────────
+// ───────────────────────────── Order Schemas ─────────────────────────────
 
 const orderItemSchema = z.object({
   id: z.string().min(1),
@@ -87,7 +89,7 @@ const orderCreate = z.object({
   specialInstructions: z.string().optional().default(''),
 })
 
-// ─────────────────────── Staff Schemas ───────────────────────
+// ───────────────────────────── Staff Schemas ─────────────────────────────
 
 const staffCreate = z.object({
   email: z.string().email('Valid email is required'),
@@ -97,7 +99,7 @@ const staffCreate = z.object({
   }),
 })
 
-// ─────────────────────── Restaurant Schemas ───────────────────────
+// ───────────────────────────── Restaurant Schemas ─────────────────────────────
 
 const restaurantCreate = z.object({
   name: z.string().min(1, 'Restaurant name is required'),

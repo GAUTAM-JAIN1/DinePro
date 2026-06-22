@@ -72,6 +72,7 @@ function MenuPanel({ restaurant }) {
 
   const emptyForm = {
     name: '', nameHindi: '', price: '', category: '', categoryHindi: '',
+    subcategory: '', subcategoryHindi: '',
     description: '', descriptionHindi: '', imageUrl: '',
     isVeg: true, isAvailable: true, isBestseller: false,
     hasVariants: false, variants: [],
@@ -79,6 +80,16 @@ function MenuPanel({ restaurant }) {
   const [form, setForm] = useState(emptyForm)
 
   const categories = ['All', ...new Set(menuItems.map(i => i.category).filter(Boolean))]
+
+  // Existing subcategories for the currently-selected category — used as datalist suggestions
+  const subcategorySuggestions = useMemo(() => {
+    if (!form.category) return []
+    return [...new Set(
+      menuItems
+        .filter(i => i.category === form.category && i.subcategory)
+        .map(i => i.subcategory)
+    )]
+  }, [menuItems, form.category])
 
   useEffect(() => { fetchMenu() }, [restaurant.id])
 
@@ -122,6 +133,7 @@ function MenuPanel({ restaurant }) {
       name: item.name || '', nameHindi: item.nameHindi || '',
       price: item.price || '', category: item.category || '',
       categoryHindi: item.categoryHindi || '',
+      subcategory: item.subcategory || '', subcategoryHindi: item.subcategoryHindi || '',
       description: item.description || '', descriptionHindi: item.descriptionHindi || '',
       imageUrl: item.imageUrl || '', isVeg: item.isVeg ?? true,
       isAvailable: item.isAvailable ?? true, isBestseller: item.isBestseller ?? false,
@@ -168,12 +180,19 @@ function MenuPanel({ restaurant }) {
     .filter(i => filterCat === 'All' || i.category === filterCat)
     .filter(i => !search || (i.name || '').toLowerCase().includes(search.toLowerCase()))
 
-  const grouped = {}
-  filtered.forEach(i => {
-    const cat = i.category || 'Uncategorized'
-    if (!grouped[cat]) grouped[cat] = []
-    grouped[cat].push(i)
-  })
+  // Category -> Subcategory -> items nested grouping.
+  // Items without a subcategory land in a "General" bucket within their category.
+  const grouped = useMemo(() => {
+    const result = {}
+    filtered.forEach(i => {
+      const cat = i.category || 'Uncategorized'
+      const subcat = i.subcategory?.trim() || 'General'
+      if (!result[cat]) result[cat] = {}
+      if (!result[cat][subcat]) result[cat][subcat] = []
+      result[cat][subcat].push(i)
+    })
+    return result
+  }, [filtered])
 
   const inp = {
     width: '100%', border: '1px solid #EFE7DB', borderRadius: '10px',
@@ -218,13 +237,13 @@ function MenuPanel({ restaurant }) {
               <label>
                 <span style={labelStyle}>Name (English) *</span>
                 <input type="text" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
-                  placeholder="Paneer Tikka" style={inp} />
+                  placeholder="Cheese Burger" style={inp} />
               </label>
               {/* Name HI */}
               <label>
                 <span style={labelStyle}>Name (Hindi)</span>
                 <input type="text" value={form.nameHindi} onChange={e => setForm({ ...form, nameHindi: e.target.value })}
-                  placeholder="पनीर टिक्का" style={inp} />
+                  placeholder="चीज़ बर्गर" style={inp} />
               </label>
 
               {/* Price */}
@@ -248,6 +267,23 @@ function MenuPanel({ restaurant }) {
                 <span style={labelStyle}>Category (Hindi)</span>
                 <input type="text" value={form.categoryHindi} onChange={e => setForm({ ...form, categoryHindi: e.target.value })}
                   placeholder="स्टार्टर" style={inp} />
+              </label>
+
+              {/* Subcategory */}
+              <label>
+                <span style={labelStyle}>Subcategory <span style={{ textTransform: 'none', fontWeight: '400', color: '#9c9389' }}>(optional)</span></span>
+                <input type="text" value={form.subcategory} onChange={e => setForm({ ...form, subcategory: e.target.value })}
+                  placeholder="Burgers" list="subcat-list-sa" style={inp} />
+                <datalist id="subcat-list-sa">
+                  {subcategorySuggestions.map(s => <option key={s} value={s} />)}
+                </datalist>
+              </label>
+
+              {/* Subcategory Hindi */}
+              <label>
+                <span style={labelStyle}>Subcategory (Hindi)</span>
+                <input type="text" value={form.subcategoryHindi} onChange={e => setForm({ ...form, subcategoryHindi: e.target.value })}
+                  placeholder="बर्गर" style={inp} />
               </label>
 
               {/* Veg toggle */}
@@ -367,90 +403,106 @@ function MenuPanel({ restaurant }) {
         </div>
       )}
 
-      {/* Menu grid grouped by category */}
-      {!loading && Object.entries(grouped).map(([cat, items]) => (
-        <div key={cat} style={{ marginBottom: '28px' }}>
-          <h3 style={{ fontFamily: 'Cormorant Garamond,serif', fontSize: '20px', fontWeight: '700', color: '#1E1A17', marginBottom: '12px', borderBottom: '1px solid #EFE7DB', paddingBottom: '8px' }}>
+      {/* Menu grid: Category -> Subcategory -> items */}
+      {!loading && Object.entries(grouped).map(([cat, subcats]) => (
+        <div key={cat} style={{ marginBottom: '32px' }}>
+          <h3 style={{ fontFamily: 'Cormorant Garamond,serif', fontSize: '22px', fontWeight: '700', color: '#1E1A17', marginBottom: '14px', borderBottom: '2px solid #B88746', paddingBottom: '8px' }}>
             {cat}
           </h3>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(240px,1fr))', gap: '16px' }}>
-            {items.map(item => (
-              <div key={item.id} style={{
-                background: '#fff', borderRadius: '16px', overflow: 'hidden',
-                border: item.isAvailable ? '1px solid #EFE7DB' : '2px solid #fee2e2',
-                opacity: item.isAvailable ? 1 : 0.7,
-                boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
-              }}>
-                {item.imageUrl ? (
-                  <img src={item.imageUrl} alt={item.name}
-                    style={{ width: '100%', height: '150px', objectFit: 'cover', display: 'block' }}
-                    onError={e => { e.target.style.display = 'none' }} />
-                ) : (
-                  <div style={{ width: '100%', height: '80px', background: '#F5F0E8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '28px' }}>
-                    {item.isVeg !== false ? '🥬' : '🍖'}
-                  </div>
-                )}
-                <div style={{ padding: '12px 14px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span style={{
-                          width: '12px', height: '12px', borderRadius: '3px', flexShrink: 0,
-                          border: `2px solid ${item.isVeg !== false ? '#2d7a2d' : '#c0392b'}`,
-                          background: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                        }}>
-                          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: item.isVeg !== false ? '#2d7a2d' : '#c0392b', display: 'block' }} />
-                        </span>
-                        <span style={{ fontWeight: '700', color: '#1E1A17', fontSize: '14px' }}>{item.name}</span>
+
+          {Object.entries(subcats).map(([subcat, items]) => (
+            <div key={subcat} style={{ marginBottom: '20px', marginLeft: '4px' }}>
+              {/* Only show a subcategory heading when it's a real subcategory, or when there are multiple buckets in this category */}
+              {(subcat !== 'General' || Object.keys(subcats).length > 1) && (
+                <h4 style={{
+                  fontFamily: 'Jost,sans-serif', fontSize: '13px', fontWeight: '700',
+                  color: '#B88746', textTransform: 'uppercase', letterSpacing: '0.6px',
+                  marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '8px',
+                }}>
+                  <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#B88746' }} />
+                  {subcat}
+                </h4>
+              )}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(240px,1fr))', gap: '16px' }}>
+                {items.map(item => (
+                  <div key={item.id} style={{
+                    background: '#fff', borderRadius: '16px', overflow: 'hidden',
+                    border: item.isAvailable ? '1px solid #EFE7DB' : '2px solid #fee2e2',
+                    opacity: item.isAvailable ? 1 : 0.7,
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
+                  }}>
+                    {item.imageUrl ? (
+                      <img src={item.imageUrl} alt={item.name}
+                        style={{ width: '100%', height: '150px', objectFit: 'cover', display: 'block' }}
+                        onError={e => { e.target.style.display = 'none' }} />
+                    ) : (
+                      <div style={{ width: '100%', height: '80px', background: '#F5F0E8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '28px' }}>
+                        {item.isVeg !== false ? '🥬' : '🍖'}
                       </div>
-                      {item.nameHindi && <p style={{ fontSize: '11px', color: '#6E6256', margin: '2px 0 0 18px' }}>{item.nameHindi}</p>}
-                    </div>
-                    <span style={{ fontFamily: 'Cormorant Garamond,serif', fontSize: '16px', fontWeight: '700', color: '#B88746', marginLeft: '8px' }}>
-                      ₹{item.price}
-                    </span>
-                  </div>
-
-                  {item.description && (
-                    <p style={{ fontSize: '11px', color: '#6E6256', margin: '4px 0', lineHeight: '1.4' }}>
-                      {item.description}
-                    </p>
-                  )}
-
-                  {item.isBestseller && (
-                    <span style={{ fontSize: '10px', background: '#fef9c3', color: '#854d0e', borderRadius: '6px', padding: '2px 8px', fontWeight: '700' }}>
-                      ⭐ Bestseller
-                    </span>
-                  )}
-
-                  {item.hasVariants && item.variants?.length > 0 && (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', margin: '6px 0' }}>
-                      {item.variants.map((v, i) => (
-                        <span key={i} style={{ fontSize: '10px', background: '#F5F0E8', color: '#6E6256', padding: '2px 8px', borderRadius: '20px' }}>
-                          {v.name}: ₹{v.price}
+                    )}
+                    <div style={{ padding: '12px 14px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <span style={{
+                              width: '12px', height: '12px', borderRadius: '3px', flexShrink: 0,
+                              border: `2px solid ${item.isVeg !== false ? '#2d7a2d' : '#c0392b'}`,
+                              background: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                            }}>
+                              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: item.isVeg !== false ? '#2d7a2d' : '#c0392b', display: 'block' }} />
+                            </span>
+                            <span style={{ fontWeight: '700', color: '#1E1A17', fontSize: '14px' }}>{item.name}</span>
+                          </div>
+                          {item.nameHindi && <p style={{ fontSize: '11px', color: '#6E6256', margin: '2px 0 0 18px' }}>{item.nameHindi}</p>}
+                        </div>
+                        <span style={{ fontFamily: 'Cormorant Garamond,serif', fontSize: '16px', fontWeight: '700', color: '#B88746', marginLeft: '8px' }}>
+                          ₹{item.price}
                         </span>
-                      ))}
-                    </div>
-                  )}
+                      </div>
 
-                  <div style={{ display: 'flex', gap: '6px', marginTop: '10px' }}>
-                    <button onClick={() => toggleAvailability(item)}
-                      style={{
-                        flex: 1, padding: '7px', borderRadius: '8px', border: 'none',
-                        background: item.isAvailable ? '#dcfce7' : '#fee2e2',
-                        color: item.isAvailable ? '#15803d' : '#b91c1c',
-                        fontSize: '11px', fontWeight: '700', cursor: 'pointer', fontFamily: 'Jost,sans-serif',
-                      }}>
-                      {item.isAvailable ? '✅ Available' : '❌ Sold Out'}
-                    </button>
-                    <button onClick={() => handleEdit(item)}
-                      style={{ ...actionBtn('#eff6ff', '#1d4ed8'), padding: '7px 12px' }}>✏️</button>
-                    <button onClick={() => handleDelete(item.id)}
-                      style={{ ...actionBtn('#fee2e2', '#b91c1c'), padding: '7px 12px' }}>🗑️</button>
+                      {item.description && (
+                        <p style={{ fontSize: '11px', color: '#6E6256', margin: '4px 0', lineHeight: '1.4' }}>
+                          {item.description}
+                        </p>
+                      )}
+
+                      {item.isBestseller && (
+                        <span style={{ fontSize: '10px', background: '#fef9c3', color: '#854d0e', borderRadius: '6px', padding: '2px 8px', fontWeight: '700' }}>
+                          ⭐ Bestseller
+                        </span>
+                      )}
+
+                      {item.hasVariants && item.variants?.length > 0 && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', margin: '6px 0' }}>
+                          {item.variants.map((v, i) => (
+                            <span key={i} style={{ fontSize: '10px', background: '#F5F0E8', color: '#6E6256', padding: '2px 8px', borderRadius: '20px' }}>
+                              {v.name}: ₹{v.price}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      <div style={{ display: 'flex', gap: '6px', marginTop: '10px' }}>
+                        <button onClick={() => toggleAvailability(item)}
+                          style={{
+                            flex: 1, padding: '7px', borderRadius: '8px', border: 'none',
+                            background: item.isAvailable ? '#dcfce7' : '#fee2e2',
+                            color: item.isAvailable ? '#15803d' : '#b91c1c',
+                            fontSize: '11px', fontWeight: '700', cursor: 'pointer', fontFamily: 'Jost,sans-serif',
+                          }}>
+                          {item.isAvailable ? '✅ Available' : '❌ Sold Out'}
+                        </button>
+                        <button onClick={() => handleEdit(item)}
+                          style={{ ...actionBtn('#eff6ff', '#1d4ed8'), padding: '7px 12px' }}>✏️</button>
+                        <button onClick={() => handleDelete(item.id)}
+                          style={{ ...actionBtn('#fee2e2', '#b91c1c'), padding: '7px 12px' }}>🗑️</button>
+                      </div>
+                    </div>
                   </div>
-                </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </div>
+          ))}
         </div>
       ))}
     </div>
@@ -758,8 +810,11 @@ function SuperAdmin({ onManageRestaurant }) {
               <strong style={{ color: '#b91c1c' }}>{deleteConfirm.name}</strong> aur uske saare staff accounts, menu, tables permanently delete ho jayenge. Ye action undo nahi ho sakta.
             </p>
             <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
-              <button onClick={handleDelete} disabled={savingId?.endsWith('-delete')}
-                style={{ ...primaryBtnStyle, background: '#b91c1c' }}>
+              <button
+                onClick={handleDelete}
+                disabled={savingId?.endsWith('-delete')}
+                style={{ ...primaryBtnStyle, background: '#b91c1c' }}
+              >
                 {savingId?.endsWith('-delete') ? 'Deleting...' : 'Haan, Delete Karo'}
               </button>
               <button onClick={() => setDeleteConfirm(null)} style={ghostBtnStyle}>Cancel</button>
@@ -807,20 +862,34 @@ function SuperAdmin({ onManageRestaurant }) {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 <label>
                   <span style={labelStyle}>Role</span>
-                  <select value={staffForm.role} onChange={e => setStaffForm({ ...staffForm, role: e.target.value })} style={inputStyle}>
+                  <select
+                    value={staffForm.role}
+                    onChange={(e) => setStaffForm({ ...staffForm, role: e.target.value })}
+                    style={inputStyle}
+                  >
                     <option value="chef">Chef</option>
                     <option value="receptionist">Receptionist</option>
                   </select>
                 </label>
                 <label>
                   <span style={labelStyle}>Email</span>
-                  <input type="email" value={staffForm.email} onChange={e => setStaffForm({ ...staffForm, email: e.target.value })}
-                    placeholder="chef@restaurant.com" style={inputStyle} />
+                  <input
+                    type="email"
+                    value={staffForm.email}
+                    onChange={(e) => setStaffForm({ ...staffForm, email: e.target.value })}
+                    placeholder="chef@restaurant.com"
+                    style={inputStyle}
+                  />
                 </label>
                 <label>
                   <span style={labelStyle}>Password</span>
-                  <input type="password" value={staffForm.password} onChange={e => setStaffForm({ ...staffForm, password: e.target.value })}
-                    placeholder="Min 6 characters" style={inputStyle} />
+                  <input
+                    type="password"
+                    value={staffForm.password}
+                    onChange={(e) => setStaffForm({ ...staffForm, password: e.target.value })}
+                    placeholder="Min 6 characters"
+                    style={inputStyle}
+                  />
                 </label>
                 <button onClick={addStaff} disabled={addingStaff} style={primaryBtnStyle}>
                   {addingStaff ? 'Creating...' : 'Create Account'}

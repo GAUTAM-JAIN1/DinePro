@@ -18,6 +18,8 @@ function MenuPage() {
   const { totalItems, totalAmount } = useCart()
   const navigate = useNavigate()
   const [activeCategory, setActiveCategory] = useState('All')
+  const [activeSubcategory, setActiveSubcategory] = useState('All')
+  const [expandedCategory, setExpandedCategory] = useState(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [language, setLanguage] = useState('en')
   const [dietFilter, setDietFilter] = useState('all')
@@ -26,6 +28,23 @@ function MenuPage() {
   const categories = useMemo(() => {
     return [...new Set(menu.map(item => item.category).filter(Boolean))]
   }, [menu])
+
+  // Subcategories available within a given category
+  const subcategoriesByCategory = useMemo(() => {
+    const map = {}
+    menu.forEach(item => {
+      if (!item.category) return
+      const sub = item.subcategory?.trim()
+      if (!sub) return
+      if (!map[item.category]) map[item.category] = new Set()
+      map[item.category].add(sub)
+    })
+    const result = {}
+    Object.entries(map).forEach(([cat, set]) => { result[cat] = [...set] })
+    return result
+  }, [menu])
+
+  const getSubcategories = (cat) => subcategoriesByCategory[cat] || []
 
   const categoryLabels = useMemo(() => {
     const labels = { All: language === 'hi' ? 'सभी' : 'All' }
@@ -39,27 +58,79 @@ function MenuPage() {
     return labels
   }, [language, menu])
 
+  const subcategoryLabels = useMemo(() => {
+    const labels = {}
+    menu.forEach(item => {
+      const sub = item.subcategory?.trim()
+      if (sub) {
+        labels[sub] = language === 'hi'
+          ? item.subcategoryHindi || sub
+          : sub
+      }
+    })
+    return labels
+  }, [language, menu])
+
+  const handleSelectCategory = (cat) => {
+    setActiveCategory(cat)
+    setActiveSubcategory('All')
+  }
+
+  const handleSelectSubcategory = (cat, sub) => {
+    setActiveCategory(cat)
+    setActiveSubcategory(sub)
+    setExpandedCategory(cat)
+  }
+
+  const handleToggleExpand = (cat) => {
+    setExpandedCategory(prev => prev === cat ? null : cat)
+  }
+
   const filteredMenu = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
     return menu.filter(item => {
       if (item.isAvailable === false) return false
       if (activeCategory !== 'All' && item.category !== activeCategory) return false
+      if (activeCategory !== 'All' && activeSubcategory !== 'All') {
+        const itemSub = item.subcategory?.trim() || ''
+        if (itemSub !== activeSubcategory) return false
+      }
       if (dietFilter === 'veg' && item.isVeg === false) return false
       if (dietFilter === 'nonveg' && item.isVeg !== false) return false
       if (!query) return true
       const searchable = [
         item.name, item.nameHindi, item.description,
         item.descriptionHindi, item.category, item.categoryHindi,
+        item.subcategory, item.subcategoryHindi,
       ].filter(Boolean).join(' ').toLowerCase()
       return searchable.includes(query)
     })
-  }, [activeCategory, dietFilter, menu, searchQuery])
+  }, [activeCategory, activeSubcategory, dietFilter, menu, searchQuery])
+
+  // Group the filtered items by subcategory for display (only matters when
+  // a specific category is selected and it actually has subcategories)
+  const groupedBySubcategory = useMemo(() => {
+    if (activeCategory === 'All' || activeSubcategory !== 'All') return null
+    const subs = getSubcategories(activeCategory)
+    if (subs.length === 0) return null
+
+    const groups = {}
+    filteredMenu.forEach(item => {
+      const key = item.subcategory?.trim() || 'General'
+      if (!groups[key]) groups[key] = []
+      groups[key].push(item)
+    })
+    return groups
+  }, [activeCategory, activeSubcategory, filteredMenu, subcategoriesByCategory])
 
   const tableNumber = table?.tableNumber || tableId
   const restaurantName = restaurant?.name || 'Our Menu'
   const categoryTitle = activeCategory === 'All'
     ? (language === 'hi' ? 'सभी व्यंजन' : 'All Dishes')
     : categoryLabels[activeCategory] || activeCategory
+  const subcategoryTitle = activeSubcategory !== 'All'
+    ? (subcategoryLabels[activeSubcategory] || activeSubcategory)
+    : null
 
   if (!restaurantId || !tableId) {
     return <CenteredState title="Invalid QR" message="Restaurant or table is missing from this link." />
@@ -171,8 +242,14 @@ function MenuPage() {
             <CategoryTabs
               categories={categories}
               activeCategory={activeCategory}
+              activeSubcategory={activeSubcategory}
               getLabel={(cat) => categoryLabels[cat] || cat}
-              onSelect={(cat) => { setActiveCategory(cat); setSidebarOpen(false) }}
+              getSubcategories={getSubcategories}
+              getSubcategoryLabel={(sub) => subcategoryLabels[sub] || sub}
+              expandedCategory={expandedCategory}
+              onToggleExpand={handleToggleExpand}
+              onSelect={(cat) => { handleSelectCategory(cat); setSidebarOpen(false) }}
+              onSelectSubcategory={(cat, sub) => { handleSelectSubcategory(cat, sub); setSidebarOpen(false) }}
             />
           </div>
         </div>
@@ -230,22 +307,49 @@ function MenuPage() {
           {/* Menu items */}
           <div style={{ flex: '1', padding: '16px', overflowY: 'auto' }}>
             <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '24px', fontWeight: '600', color: 'var(--text)', marginBottom: '4px' }}>
-              {categoryTitle}
+              {categoryTitle}{subcategoryTitle ? ` — ${subcategoryTitle}` : ''}
             </div>
             <div style={{ fontSize: '12px', color: 'var(--text2)', marginBottom: '12px', fontStyle: 'italic' }}>
               {filteredMenu.length} {language === 'hi' ? 'आइटम उपलब्ध' : 'items available'}
             </div>
             <div style={{ width: '40px', height: '1.5px', background: 'var(--gold)', marginBottom: '20px' }} />
 
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
-              gap: '12px'
-            }}>
-              {filteredMenu.map(item => (
-                <MenuCard key={item.id} item={item} language={language} />
-              ))}
-            </div>
+            {groupedBySubcategory ? (
+              // Show subcategory headings + grids when a category with subcategories is selected
+              Object.entries(groupedBySubcategory).map(([subKey, items]) => (
+                <div key={subKey} style={{ marginBottom: '28px' }}>
+                  {(subKey !== 'General' || Object.keys(groupedBySubcategory).length > 1) && (
+                    <div style={{
+                      fontFamily: "'Jost', sans-serif", fontSize: '13px', fontWeight: '700',
+                      color: 'var(--gold)', textTransform: 'uppercase', letterSpacing: '0.6px',
+                      marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px',
+                    }}>
+                      <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--gold)' }} />
+                      {subcategoryLabels[subKey] || subKey}
+                    </div>
+                  )}
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
+                    gap: '12px'
+                  }}>
+                    {items.map(item => (
+                      <MenuCard key={item.id} item={item} language={language} />
+                    ))}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
+                gap: '12px'
+              }}>
+                {filteredMenu.map(item => (
+                  <MenuCard key={item.id} item={item} language={language} />
+                ))}
+              </div>
+            )}
 
             {filteredMenu.length === 0 && (
               <div style={{ color: 'var(--text2)', textAlign: 'center', padding: '36px 12px' }}>
