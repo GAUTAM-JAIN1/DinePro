@@ -14,6 +14,7 @@ const { requireActiveSubscription } = require('../middleware/subscription')
 const { requireRestaurantAccess } = require('../middleware/restaurantAccess')
 const { orderRateLimit } = require('../middleware/rateLimit')
 const { validate, orderCreate } = require('../middleware/validators')
+const { broadcastNewOrder } = require('../socket/orderSocket')
 
 // POST /api/orders — PUBLIC (customer places order)
 router.post(
@@ -27,6 +28,15 @@ router.post(
       const order = await upsertOrder(restaurantId, {
         tableId, tableNumber, items, specialInstructions
       })
+
+      // Broadcast from the server so clients can never forge "new order" events
+      const io = req.app.get('io')
+      if (io) {
+        broadcastNewOrder(io, order).catch((err) =>
+          console.error('broadcastNewOrder failed:', err.message)
+        )
+      }
+
       res.json({ success: true, order })
     } catch (err) {
       res.status(err.statusCode || 500).json({ success: false, error: err.message })
