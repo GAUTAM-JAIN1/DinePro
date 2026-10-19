@@ -1,186 +1,74 @@
-# Restaurant SaaS - QR Code Menu & Order Management System
+# DinePro — Restaurant SaaS (QR Menu, Kitchen Display & Billing)
 
-A modern, full-stack SaaS platform for restaurants to manage orders through QR code menu scanning, kitchen operations, and billing.
+Multi-tenant restaurant platform: customers scan a table QR code, order from their phone, the kitchen and billing
+desk update in real time.
 
-## 📋 Project Structure
+## Project structure
 
 ```
-restaurant-saas/
+DinePro/
 ├── apps/
-│   ├── customer-app/           # Customer menu & ordering
-│   ├── chef-panel/             # Kitchen display system
-│   ├── receptionist-panel/     # Billing & tables
-│   └── admin-panel/            # Admin settings & menu management
-├── backend/                    # Node.js + Express API server
-├── shared/                     # Shared utilities & constants
-├── firebase/                   # Firestore security rules
-└── docs/                       # Documentation
+│   └── web/              # ONE React + Vite app: customer, chef, receptionist, admin, super admin
+├── backend/              # Node.js + Express + Socket.io API
+├── shared/               # Shared constants / helpers
+├── firebase/             # Firestore + Storage security rules
+├── docs/                 # architecture, API, onboarding, deployment
+└── render.yaml           # optional Render blueprint for the backend
 ```
 
-## 🚀 Quick Start
+## One app, role-based entry
 
-### Prerequisites
-- Node.js 18+
-- Firebase project
-- npm or yarn
+Open the site → **"Who are you?"**
 
-### Installation
+| Card         | Goes to                | Needs                                   |
+| ------------ | ---------------------- | --------------------------------------- |
+| Customer     | `/r/<restaurant>/table/<n>` (normally via QR) | nothing — no login |
+| Chef         | `/chef`                | account with role `chef` (or `admin`)   |
+| Receptionist | `/reception`           | account with role `receptionist` (or `admin`) |
+| Admin        | `/admin`               | account with role `admin`               |
+| Super Admin  | `/admin/super-admin`   | account with `platformAdmin` claim      |
 
-1. **Clone and setup:**
+Roles are Firebase custom claims. The backend and Socket.io verify them on every protected request — choosing a
+card never grants access.
+
+## Tech stack
+
+- **Frontend:** React 19, Vite, React Router 7, Tailwind CSS, Framer Motion, Socket.io client
+- **Backend:** Node.js, Express, Socket.io, Firebase Admin SDK, Zod, Cloudinary
+- **Database / Auth:** Firebase Firestore + Firebase Authentication
+- **Hosting:** Vercel (frontend) + Render (backend, kept awake with UptimeRobot)
+
+## Quick start
+
 ```bash
-cd DIGITAL_MENU
-```
-
-2. **Backend setup:**
-```bash
+# 1. backend
 cd backend
+cp .env.example .env        # fill in Firebase credentials
 npm install
+npm run dev                 # http://localhost:5000
+
+# 2. frontend
+cd apps/web
 cp .env.example .env
-# Edit .env with your Firebase credentials
-npm run dev
-```
-
-3. **Frontend apps (customer, chef-panel, receptionist-panel, admin-panel):**
-```bash
-cd apps/customer-app
 npm install
-npm run dev
+npm run dev                 # http://localhost:5173
 ```
 
-Repeat for other apps.
+## Real-time events (Socket.io)
 
-## 📱 Apps Overview
+- Staff sockets send their Firebase ID token in the handshake; staff-only events (`order_preparing`, `order_ready`,
+  `item_status`, `chef_message`, `cancel_order`, `close_bill`) are rejected unless the token's role and
+  `restaurantId` match.
+- New orders are broadcast **by the server** right after `POST /api/orders` saves them.
+- Customers connect anonymously (they can only `join_restaurant` and `call_waiter`).
 
-### Customer App
-- Scan QR code at table
-- Browse menu by category
-- Add items to cart
-- Place order
-- Real-time order status updates
+## Documentation
 
-### Chef Panel
-- Live kitchen display system
-- View incoming orders
-- Update order status (Preparing → Ready)
-- Prioritize orders
+- [Deployment (Vercel + Render + UptimeRobot)](docs/deployment.md)
+- [Architecture](docs/architecture.md)
+- [Onboarding a restaurant](docs/onboarding.md)
+- [API reference](docs/api.md)
 
-### Receptionist Panel
-- View all active tables & bills
-- Generate itemized bills
-- Print receipts
-- Track revenue
-
-### Admin Panel
-- Menu item management (add/edit/delete/upload images)
-- Table management (create/setup QR codes)
-- Restaurant settings (logo, address, theme)
-- Dashboard with analytics
-- Super admin: manage multiple restaurants
-
-## 🏗️ Architecture
-
-### Multi-Tenant System
-Each restaurant is a separate tenant with isolated:
-- Firestore data (`/restaurants/{restaurantId}`)
-- Socket.io rooms for real-time updates
-- User access controls
-
-### Real-Time Features
-- Socket.io for instant order updates
-- Live kitchen display
-- Auto-updated billing
-- Customer order status notifications
-
-### Authentication
-- Firebase Auth (email/password)
-- JWT tokens for API requests
-- Role-based access (Chef, Receptionist, Admin, SuperAdmin)
-
-## 📊 Database Schema
-
-```
-restaurants/
-  └── {restaurantId}/
-      ├── menu/
-      │   └── {itemId}: { name, price, category, image, available }
-      ├── orders/
-      │   └── {orderId}: { tableId, items, status, total, createdAt }
-      └── tables/
-          └── {tableId}: { number, qrCode, capacity }
-```
-
-## 🔐 Security
-
-- Multi-tenant isolation via Firestore rules
-- JWT token verification on backend
-- Firebase security rules enforce access control
-- No cross-tenant data access
-
-## 📡 API Endpoints
-
-### Core Routes
-- `POST /api/orders` - Place order
-- `GET /api/orders/:restaurantId` - Get orders
-- `GET /api/menu/:restaurantId` - Get menu
-- `POST /api/menu` - Add menu item
-- `GET/PUT /api/restaurants/:restaurantId` - Restaurant CRUD
-
-### Real-Time (Socket.io)
-- `subscribe_kitchen` - Listen to kitchen orders
-- `subscribe_billing` - Listen to billing updates
-- `order_status_update` - Update order status
-
-See `docs/api.md` for detailed API docs.
-
-## 🔧 Development
-
-### Tech Stack
-- **Frontend**: React 18, Vite, Socket.io-client
-- **Backend**: Express, Socket.io, Firebase Admin SDK
-- **Database**: Firestore
-- **Auth**: Firebase Authentication
-- **Deployment**: Firebase Hosting (frontend), Cloud Run (backend)
-
-### Environment Setup
-1. Create Firebase project
-2. Generate service account key
-3. Set environment variables in `backend/.env`
-4. Deploy Firestore security rules
-
-## 📚 Documentation
-
-- [Architecture Overview](docs/architecture.md) - System design & data flow
-- [Onboarding Guide](docs/onboarding.md) - How to add restaurants
-- [API Reference](docs/api.md) - Complete API documentation
-
-## 🚢 Deployment
-
-### Frontend (Firebase Hosting)
-```bash
-npm run build
-firebase deploy
-```
-
-### Backend (Cloud Run)
-```bash
-gcloud run deploy restaurant-saas-api --source .
-```
-
-## 🤝 Contributing
-
-This is a SaaS template. Customize for your use case:
-- Add payment integration (Stripe, Razorpay)
-- Implement inventory management
-- Add analytics & reporting
-- Email/SMS notifications
-
-## 📄 License
+## License
 
 MIT
-
----
-
-**Quick Links:**
-- [API Docs](docs/api.md)
-- [Architecture](docs/architecture.md)
-- [Setup Guide](docs/onboarding.md)

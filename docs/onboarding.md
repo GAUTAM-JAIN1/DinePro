@@ -30,7 +30,7 @@
 ### Step 4: Assign Staff
 1. Go to Staff Management
 2. Create accounts for:
-   - Chef (Kitchen Display access)
+   - Chef (Kitchen Display access) — signs in from the "Chef" card on the home screen
    - Receptionist (Billing access)
    - Admin (Full restaurant settings)
 
@@ -41,19 +41,36 @@
 
 ## System Configuration
 
-### Environment Variables
+### Backend environment variables (Render / `backend/.env`)
 ```
-FIREBASE_SERVICE_ACCOUNT=<service-account-json>
-FIREBASE_DATABASE_URL=<firebase-url>
-CLIENT_URL=<frontend-url>
-PORT=3000
+PORT=5000
+CLIENT_ORIGINS=https://<your-app>.vercel.app
+FIREBASE_PROJECT_ID=<firebase-project-id>
+FIREBASE_SERVICE_ACCOUNT=<service-account-json-on-one-line>
+CLOUDINARY_CLOUD_NAME=<cloud-name>
+CLOUDINARY_API_KEY=<api-key>
+CLOUDINARY_API_SECRET=<api-secret>
 ```
+
+### Frontend environment variables (Vercel / `apps/web/.env`)
+```
+VITE_API_URL=https://<service>.onrender.com
+VITE_SOCKET_URL=https://<service>.onrender.com
+VITE_FIREBASE_API_KEY=<...>
+VITE_FIREBASE_AUTH_DOMAIN=<...>
+VITE_FIREBASE_PROJECT_ID=<...>
+VITE_FIREBASE_STORAGE_BUCKET=<...>
+VITE_FIREBASE_MESSAGING_SENDER_ID=<...>
+VITE_FIREBASE_APP_ID=<...>
+```
+
+See `docs/deployment.md` for the full Vercel + Render + UptimeRobot setup.
 
 ### Firebase Setup
 1. Create Firestore database
 2. Deploy security rules from `firebase/firestore.rules`
 3. Setup authentication (Email/Password)
-4. Create Storage bucket for images
+4. Images are uploaded through the backend (Cloudinary)
 
 ## Testing Restaurant Setup
 1. Scan QR code from test device

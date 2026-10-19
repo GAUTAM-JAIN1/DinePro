@@ -1,0 +1,29 @@
+# Render Blueprint — optional. Lets you create/update the backend from this file
+# (Dashboard → New → Blueprint). Secrets are NOT stored here; fill them in the dashboard.
+services:
+  - type: web
+    name: dinepro-api
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: NODE_ENV
+        value: production
+      - key: CLIENT_ORIGINS
+        sync: false # e.g. https://dinepro.vercel.app
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT
+        sync: false # whole service-account JSON, on one line
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false

@@ -1,0 +1,206 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ------------------------------------------------------------------
+   Global base — shared by every panel
+------------------------------------------------------------------- */
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: #0d0d0d;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
+  overflow-x: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+/* iOS Safari zooms into inputs below 16px — keep them at 16px on phones */
+@media (max-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+/* Tactile press feedback on every button that doesn't set its own transform inline */
+button {
+  transition: transform 0.15s ease, opacity 0.15s ease, background-color 0.2s ease,
+    border-color 0.2s ease, box-shadow 0.2s ease;
+}
+button:not(:disabled):active {
+  transform: scale(0.97);
+}
+button:disabled {
+  cursor: not-allowed;
+}
+
+:focus-visible {
+  outline: 2px solid #d4a15a;
+  outline-offset: 2px;
+}
+
+/* Thin gold scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(184, 135, 70, 0.3);
+  border-radius: 6px;
+}
+
+/* ------------------------------------------------------------------
+   Panel themes — each panel keeps its own look, scoped to a wrapper
+   (previously these were global :root/body rules that would collide)
+------------------------------------------------------------------- */
+.theme-customer,
+.theme-chef,
+.theme-admin,
+.theme-gate {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.theme-customer {
+  --bg: #f5f0e8;
+  --bg2: #efe7db;
+  --sidebar: #0d0d0d;
+  --gold: #b88746;
+  --gold-l: #d4a15a;
+  --card: #fffdf9;
+  --text: #1e1a17;
+  --text2: #6e6256;
+  --text3: #a89880;
+  --btn: #2b1a0d;
+  --btn2: #5b3a1a;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Jost', sans-serif;
+}
+
+.theme-chef {
+  --bg: #0d0d0d;
+  --bg2: #141414;
+  --bg3: #1a1a1a;
+  --bg4: #222222;
+  --gold: #b88746;
+  --gold-l: #d4a15a;
+  --red: #e74c3c;
+  --yellow: #f39c12;
+  --green: #27ae60;
+  --text: #f5f0e8;
+  --text2: #8b7d6b;
+  --text3: #5a4f45;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Space Grotesk', sans-serif;
+}
+
+.theme-admin {
+  background: #f8fafc;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+/* Role chooser / login / notices */
+.theme-gate {
+  background:
+    radial-gradient(900px 500px at 10% -10%, rgba(184, 135, 70, 0.18), transparent 60%),
+    radial-gradient(800px 500px at 100% 110%, rgba(184, 135, 70, 0.12), transparent 60%),
+    #0d0d0d;
+  color: #f5f0e8;
+  font-family: 'Jost', system-ui, sans-serif;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* ------------------------------------------------------------------
+   Small shared animations
+------------------------------------------------------------------- */
+@keyframes dp-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.dp-skeleton {
+  background: linear-gradient(90deg, rgba(255,255,255,0.05) 25%, rgba(255,255,255,0.12) 37%, rgba(255,255,255,0.05) 63%);
+  background-size: 200% 100%;
+  animation: dp-shimmer 1.4s ease infinite;
+  border-radius: 12px;
+}
+
+@keyframes dp-spin {
+  to { transform: rotate(360deg); }
+}
+.dp-spinner {
+  width: 22px;
+  height: 22px;
+  border-radius: 9999px;
+  border: 2px solid rgba(212, 161, 90, 0.25);
+  border-top-color: #d4a15a;
+  animation: dp-spin 0.8s linear infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+
+/* ------------------------------------------------------------------
+   Modals & bottom sheets — every Tailwind `fixed inset-0` overlay gets a soft
+   fade, and its dialog pops in. (Inline-styled overlays use .dp-overlay / .dp-dialog.)
+------------------------------------------------------------------- */
+@keyframes dp-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes dp-pop-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+div.fixed.inset-0,
+.dp-overlay {
+  animation: dp-fade-in 0.2s ease both;
+}
+div.fixed.inset-0 > div,
+.dp-dialog {
+  animation: dp-pop-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@media print {
+  div.fixed.inset-0, div.fixed.inset-0 > div { animation: none !important; }
+}
+
+/* Light-surface skeleton (admin, reception) */
+.dp-skeleton-light {
+  background: linear-gradient(90deg, rgba(30,26,23,0.06) 25%, rgba(30,26,23,0.12) 37%, rgba(30,26,23,0.06) 63%);
+  background-size: 200% 100%;
+}
+
+/* Smooth hover lift for clickable cards/rows that opt in */
+.dp-lift { transition: transform 0.2s ease, box-shadow 0.2s ease; }
+@media (hover: hover) {
+  .dp-lift:hover { transform: translateY(-2px); box-shadow: 0 10px 28px rgba(0,0,0,0.12); }
+}
+
+/* Respect users who ask for less motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
