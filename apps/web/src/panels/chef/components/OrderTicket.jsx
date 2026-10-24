@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import StatusBadge from './StatusBadge'
 import OrderItem from './OrderItem'
 
@@ -9,6 +9,9 @@ function OrderTicket({ order, visibleItems, onMarkPreparing, onMarkReady, onUpda
   const [elapsed, setElapsed] = useState(() => getElapsedSeconds(order.createdAt))
   const [customMessage, setCustomMessage] = useState('')
   const [sentReply, setSentReply] = useState(null)
+  const replyTimerRef = useRef(null)
+
+  useEffect(() => () => clearTimeout(replyTimerRef.current), [])
 
   useEffect(() => {
     setElapsed(getElapsedSeconds(order.createdAt))
@@ -19,6 +22,8 @@ function OrderTicket({ order, visibleItems, onMarkPreparing, onMarkReady, onUpda
   }, [order.createdAt])
 
   const itemsToShow = visibleItems?.length ? visibleItems : order.items || []
+  // Bug #50: when a filter hides some items, the buttons say they act on the shown items only.
+  const isFiltered = itemsToShow.length !== (order.items || []).length
   const isUrgent = elapsed >= URGENT_AFTER_SECONDS
   const timerColor = isUrgent ? 'var(--red)' : elapsed >= 10 * 60 ? 'var(--yellow)' : 'var(--text2)'
 
@@ -51,7 +56,8 @@ function OrderTicket({ order, visibleItems, onMarkPreparing, onMarkReady, onUpda
     setSentReply(trimmed)
     onSendChefMessage(order, trimmed)
     setCustomMessage('')
-    setTimeout(() => setSentReply(null), 3000)
+    clearTimeout(replyTimerRef.current)
+    replyTimerRef.current = setTimeout(() => setSentReply(null), 3000)
   }
 
   return (
@@ -168,19 +174,19 @@ function OrderTicket({ order, visibleItems, onMarkPreparing, onMarkReady, onUpda
         {order.status !== 'ready' && (
           <button
             type="button"
-            onClick={() => onMarkPreparing(order)}
+            onClick={() => onMarkPreparing(order, itemsToShow)}
             style={actionButtonStyle('var(--yellow)', '#1a0f00')}
           >
-            Mark all preparing
+            {isFiltered ? 'Mark shown preparing' : 'Mark all preparing'}
           </button>
         )}
         {order.status !== 'ready' ? (
           <button
             type="button"
-            onClick={() => onMarkReady(order)}
+            onClick={() => onMarkReady(order, itemsToShow)}
             style={actionButtonStyle('var(--green)', '#fff')}
           >
-            Mark all ready
+            {isFiltered ? 'Mark shown ready' : 'Mark all ready'}
           </button>
         ) : (
           <div style={readyStateStyle}>

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { createSocket, ensureConnected } from '@/lib/socket'
+import api from '@/lib/api'
 
 const STATUS_STEPS = [
   { key: 'new',       icon: '✓',  label: 'Order Received' },
@@ -138,6 +139,19 @@ function OrderConfirmed() {
   const [chefMessage,  setChefMessage]  = useState(null)
   const [waiterCalled, setWaiterCalled] = useState(false)
   const [connected,    setConnected]    = useState(false)
+  // Bug #52: show the table number from the table document, never the document id from the URL.
+  const [tableNumber,  setTableNumber]  = useState(null)
+
+  useEffect(() => {
+    if (!restaurantId || !tableId) return undefined
+    let cancelled = false
+    api.get(`/api/tables/${restaurantId}/${encodeURIComponent(tableId)}`)
+      .then(({ data }) => {
+        if (!cancelled && data.table?.tableNumber) setTableNumber(String(data.table.tableNumber))
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [restaurantId, tableId])
 
   const chefTimerRef   = useRef(null)
   const waiterTimerRef = useRef(null)
@@ -155,7 +169,7 @@ function OrderConfirmed() {
   const handleCallWaiter = useCallback(() => {
     if (waiterCalled) return
     const socket = getSocket()
-    socket.emit('call_waiter', { restaurantId, tableId, tableNumber: tableId })
+    socket.emit('call_waiter', { restaurantId, tableId })
     setWaiterCalled(true)
     clearTimeout(waiterTimerRef.current)
     waiterTimerRef.current = setTimeout(() => setWaiterCalled(false), 60_000)
@@ -165,17 +179,27 @@ function OrderConfirmed() {
     if (!restaurantId) return
     const socket = getSocket()
 
+    const registered = []
+    const listen = (event, handler) => {
+      socket.on(event, handler)
+      registered.push([event, handler])
+    }
+
+    // Bug #2: customers used to join the restaurant-wide room (join_restaurant),
+    // which also carries every other table's orders, the live bill stream and
+    // daily stats. join_table scopes this socket to only this table's events.
     const joinRoom = () => {
-      socket.emit('join_restaurant', restaurantId)
+      if (!tableId) return
+      socket.emit('join_table', { restaurantId, tableId: String(tableId) })
       setConnected(true)
     }
 
     if (socket.connected) joinRoom()
 
-    socket.on('connect', joinRoom)
-    socket.on('disconnect', () => setConnected(false))
+    listen('connect', joinRoom)
+    listen('disconnect', () => setConnected(false))
 
-    socket.on('status_changed', (updatedOrder) => {
+    listen('status_changed', (updatedOrder) => {
       if (!isSameTable(updatedOrder)) return
       setOrderStatus(updatedOrder.status)
       if (Array.isArray(updatedOrder.items) && updatedOrder.items.length > 0) {
@@ -183,28 +207,24 @@ function OrderConfirmed() {
       }
     })
 
-    socket.on('chef_message_received', (data) => {
+    listen('chef_message_received', (data) => {
       if (!isSameTable(data)) return
       clearTimeout(chefTimerRef.current)
       setChefMessage(data.message)
       chefTimerRef.current = setTimeout(() => setChefMessage(null), 10_000)
     })
 
-    socket.on('bill_closed', (data) => {
+    listen('bill_closed', (data) => {
       if (!isSameTable(data)) return
       setOrderStatus('closed')
     })
 
     return () => {
-      socket.off('connect', joinRoom)
-      socket.off('disconnect')
-      socket.off('status_changed')
-      socket.off('chef_message_received')
-      socket.off('bill_closed')
+      registered.forEach(([event, handler]) => socket.off(event, handler))
       clearTimeout(chefTimerRef.current)
       clearTimeout(waiterTimerRef.current)
     }
-  }, [restaurantId, isSameTable])
+  }, [restaurantId, tableId, isSameTable])
 
   const billTotal = calcTotal(orderItems)
   const showBill  = orderItems.length > 0
@@ -258,7 +278,7 @@ function OrderConfirmed() {
             {headerSub}
           </p>
           <p style={{ fontSize: '12px', color: 'rgba(255,253,249,0.3)', marginTop: '8px' }}>
-            Table {tableId}
+            {tableNumber ? `Table ${tableNumber}` : ''}
           </p>
         </div>
 

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast, { Toaster } from 'react-hot-toast'
 import api from '@/lib/api'
+import SetupLinkDialog from '@/components/SetupLinkDialog'
+import MenuManager from './MenuManager'
 import { ContentSkeleton, RowsSkeleton } from '@/components/Skeleton'
 
 const formatDate = (value) => {
@@ -61,456 +63,6 @@ const modalStyle = {
 }
 
 // ─── Menu Management sub-component ───────────────────────────────────────────
-function MenuPanel({ restaurant }) {
-  const [menuItems, setMenuItems]       = useState([])
-  const [loading, setLoading]           = useState(true)
-  const [saving, setSaving]             = useState(false)
-  const [uploadingImage, setUploadingImage] = useState(false)
-  const [showForm, setShowForm]         = useState(false)
-  const [editItem, setEditItem]         = useState(null)
-  const [search, setSearch]             = useState('')
-  const [filterCat, setFilterCat]       = useState('All')
-
-  const emptyForm = {
-    name: '', nameHindi: '', price: '', category: '', categoryHindi: '',
-    subcategory: '', subcategoryHindi: '',
-    description: '', descriptionHindi: '', imageUrl: '',
-    isVeg: true, isAvailable: true, isBestseller: false,
-    hasVariants: false, variants: [],
-  }
-  const [form, setForm] = useState(emptyForm)
-
-  const categories = ['All', ...new Set(menuItems.map(i => i.category).filter(Boolean))]
-
-  // Existing subcategories for the currently-selected category — used as datalist suggestions
-  const subcategorySuggestions = useMemo(() => {
-    if (!form.category) return []
-    return [...new Set(
-      menuItems
-        .filter(i => i.category === form.category && i.subcategory)
-        .map(i => i.subcategory)
-    )]
-  }, [menuItems, form.category])
-
-  useEffect(() => { fetchMenu() }, [restaurant.id])
-
-  const fetchMenu = async () => {
-    try {
-      setLoading(true)
-      const { data } = await api.get(`/api/menu/${restaurant.id}`)
-      if (data.success) setMenuItems(data.menu)
-    } catch { toast.error('Menu load nahi hua') }
-    finally { setLoading(false) }
-  }
-
-  const resetForm = () => { setForm(emptyForm); setEditItem(null); setShowForm(false) }
-
-  const handleSave = async () => {
-    if (!form.name || !form.price) { toast.error('Name aur price required hai!'); return }
-    if (form.hasVariants && form.variants.length === 0) { toast.error('Kam se kam ek variant add karo'); return }
-    setSaving(true)
-    try {
-      const payload = { ...form, price: Number(form.price) }
-      if (editItem) {
-        const { data } = await api.put(`/api/menu/${restaurant.id}/${editItem.id}`, payload)
-        if (data.success) {
-          setMenuItems(prev => prev.map(i => i.id === editItem.id ? data.item : i))
-          toast.success('Item update ho gaya!')
-        }
-      } else {
-        const { data } = await api.post(`/api/menu/${restaurant.id}`, payload)
-        if (data.success) {
-          setMenuItems(prev => [...prev, data.item])
-          toast.success('Item add ho gaya!')
-        }
-      }
-      resetForm()
-    } catch (err) { toast.error(err?.response?.data?.error || 'Save nahi hua') }
-    finally { setSaving(false) }
-  }
-
-  const handleEdit = (item) => {
-    setForm({
-      name: item.name || '', nameHindi: item.nameHindi || '',
-      price: item.price || '', category: item.category || '',
-      categoryHindi: item.categoryHindi || '',
-      subcategory: item.subcategory || '', subcategoryHindi: item.subcategoryHindi || '',
-      description: item.description || '', descriptionHindi: item.descriptionHindi || '',
-      imageUrl: item.imageUrl || '', isVeg: item.isVeg ?? true,
-      isAvailable: item.isAvailable ?? true, isBestseller: item.isBestseller ?? false,
-      hasVariants: item.hasVariants ?? false, variants: item.variants || [],
-    })
-    setEditItem(item); setShowForm(true)
-  }
-
-  const handleDelete = async (id) => {
-    if (!window.confirm('Delete karo?')) return
-    try {
-      const { data } = await api.delete(`/api/menu/${restaurant.id}/${id}`)
-      if (data.success) { setMenuItems(prev => prev.filter(i => i.id !== id)); toast.success('Deleted!') }
-    } catch { toast.error('Delete nahi hua') }
-  }
-
-  const toggleAvailability = async (item) => {
-    try {
-      const { data } = await api.patch(`/api/menu/${restaurant.id}/${item.id}/toggle`)
-      if (data.success) setMenuItems(prev => prev.map(i => i.id === item.id ? data.item : i))
-    } catch { toast.error('Toggle nahi hua') }
-  }
-
-  const handleImageUpload = async (e) => {
-    const file = e.target.files?.[0]; if (!file) return
-    setUploadingImage(true)
-    try {
-      const fd = new FormData()
-      fd.append('image', file)
-      fd.append('restaurantId', restaurant.id)
-      const { data } = await api.post('/api/images/upload', fd)
-      if (data.success) { setForm(f => ({ ...f, imageUrl: data.url })); toast.success('Image upload ho gaya!') }
-    } catch { toast.error('Upload fail ho gaya') }
-    finally { setUploadingImage(false) }
-  }
-
-  const addVariant    = () => setForm(f => ({ ...f, variants: [...f.variants, { name: '', nameHindi: '', price: '' }] }))
-  const removeVariant = (idx) => setForm(f => ({ ...f, variants: f.variants.filter((_, i) => i !== idx) }))
-  const updateVariant = (idx, field, val) => setForm(f => ({
-    ...f, variants: f.variants.map((v, i) => i === idx ? { ...v, [field]: val } : v)
-  }))
-
-  const filtered = menuItems
-    .filter(i => filterCat === 'All' || i.category === filterCat)
-    .filter(i => !search || (i.name || '').toLowerCase().includes(search.toLowerCase()))
-
-  // Category -> Subcategory -> items nested grouping.
-  // Items without a subcategory land in a "General" bucket within their category.
-  const grouped = useMemo(() => {
-    const result = {}
-    filtered.forEach(i => {
-      const cat = i.category || 'Uncategorized'
-      const subcat = i.subcategory?.trim() || 'General'
-      if (!result[cat]) result[cat] = {}
-      if (!result[cat][subcat]) result[cat][subcat] = []
-      result[cat][subcat].push(i)
-    })
-    return result
-  }, [filtered])
-
-  const inp = {
-    width: '100%', border: '1px solid #EFE7DB', borderRadius: '10px',
-    padding: '10px 14px', fontSize: '13px', color: '#1E1A17',
-    background: '#FFFDF9', outline: 'none', fontFamily: 'Jost,sans-serif',
-    boxSizing: 'border-box',
-  }
-
-  return (
-    <div>
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-        <div>
-          <h2 style={{ fontFamily: 'Cormorant Garamond,serif', fontSize: '26px', fontWeight: '700', color: '#1E1A17', margin: 0 }}>
-            {restaurant.name} — Menu
-          </h2>
-          <p style={{ color: '#6E6256', fontSize: '13px', margin: '4px 0 0' }}>{menuItems.length} items</p>
-        </div>
-        <button onClick={() => setShowForm(true)} style={primaryBtnStyle}>+ Item Add Karo</button>
-      </div>
-
-      {/* Search + Filter */}
-      <div style={{ display: 'flex', gap: '12px', marginBottom: '20px' }}>
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search..."
-          style={{ ...inp, flex: 1 }} />
-        <select value={filterCat} onChange={e => setFilterCat(e.target.value)}
-          style={{ ...inp, width: 'auto' }}>
-          {categories.map(c => <option key={c} value={c}>{c}</option>)}
-        </select>
-      </div>
-
-      {/* Add/Edit Modal */}
-      {showForm && (
-        <div className="dp-overlay" style={overlayStyle} onClick={e => e.target === e.currentTarget && resetForm()}>
-          <div className="dp-dialog" style={{ ...modalStyle, maxWidth: '700px', maxHeight: '90vh', overflowY: 'auto' }}>
-            <h2 style={{ fontFamily: 'Cormorant Garamond,serif', fontSize: '22px', fontWeight: '700', color: '#1E1A17', marginTop: 0 }}>
-              {editItem ? 'Item Edit Karo' : 'Naya Item Add Karo'}
-            </h2>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '14px' }}>
-              {/* Name EN */}
-              <label>
-                <span style={labelStyle}>Name (English) *</span>
-                <input type="text" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
-                  placeholder="Cheese Burger" style={inp} />
-              </label>
-              {/* Name HI */}
-              <label>
-                <span style={labelStyle}>Name (Hindi)</span>
-                <input type="text" value={form.nameHindi} onChange={e => setForm({ ...form, nameHindi: e.target.value })}
-                  placeholder="चीज़ बर्गर" style={inp} />
-              </label>
-
-              {/* Price */}
-              <label>
-                <span style={labelStyle}>Price (₹) *</span>
-                <input type="number" value={form.price} onChange={e => setForm({ ...form, price: e.target.value })}
-                  placeholder="250" style={inp} />
-              </label>
-              {/* Category */}
-              <label>
-                <span style={labelStyle}>Category</span>
-                <input type="text" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}
-                  placeholder="Starters" list="cat-list-sa" style={inp} />
-                <datalist id="cat-list-sa">
-                  {categories.filter(c => c !== 'All').map(c => <option key={c} value={c} />)}
-                </datalist>
-              </label>
-
-              {/* Category Hindi */}
-              <label>
-                <span style={labelStyle}>Category (Hindi)</span>
-                <input type="text" value={form.categoryHindi} onChange={e => setForm({ ...form, categoryHindi: e.target.value })}
-                  placeholder="स्टार्टर" style={inp} />
-              </label>
-
-              {/* Subcategory */}
-              <label>
-                <span style={labelStyle}>Subcategory <span style={{ textTransform: 'none', fontWeight: '400', color: '#9c9389' }}>(optional)</span></span>
-                <input type="text" value={form.subcategory} onChange={e => setForm({ ...form, subcategory: e.target.value })}
-                  placeholder="Burgers" list="subcat-list-sa" style={inp} />
-                <datalist id="subcat-list-sa">
-                  {subcategorySuggestions.map(s => <option key={s} value={s} />)}
-                </datalist>
-              </label>
-
-              {/* Subcategory Hindi */}
-              <label>
-                <span style={labelStyle}>Subcategory (Hindi)</span>
-                <input type="text" value={form.subcategoryHindi} onChange={e => setForm({ ...form, subcategoryHindi: e.target.value })}
-                  placeholder="बर्गर" style={inp} />
-              </label>
-
-              {/* Veg toggle */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', paddingTop: '24px' }}>
-                <span style={labelStyle}>Veg/Non-Veg:</span>
-                <button type="button" onClick={() => setForm({ ...form, isVeg: !form.isVeg })}
-                  style={{
-                    background: form.isVeg ? '#dcfce7' : '#fee2e2',
-                    color: form.isVeg ? '#15803d' : '#b91c1c',
-                    border: 'none', borderRadius: '8px', padding: '8px 16px',
-                    fontSize: '13px', fontWeight: '700', cursor: 'pointer', fontFamily: 'Jost,sans-serif',
-                  }}>
-                  {form.isVeg ? '🟢 Veg' : '🔴 Non-Veg'}
-                </button>
-              </div>
-
-              {/* Bestseller toggle */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', paddingTop: '8px' }}>
-                <span style={labelStyle}>Bestseller:</span>
-                <button type="button" onClick={() => setForm({ ...form, isBestseller: !form.isBestseller })}
-                  style={{
-                    background: form.isBestseller ? '#fef9c3' : '#f3f4f6',
-                    color: form.isBestseller ? '#854d0e' : '#374151',
-                    border: 'none', borderRadius: '8px', padding: '8px 16px',
-                    fontSize: '13px', fontWeight: '700', cursor: 'pointer', fontFamily: 'Jost,sans-serif',
-                  }}>
-                  {form.isBestseller ? '⭐ Yes' : 'No'}
-                </button>
-              </div>
-
-              {/* Description EN */}
-              <div style={{ gridColumn: '1/-1' }}>
-                <span style={labelStyle}>Description (English)</span>
-                <textarea value={form.description} onChange={e => setForm({ ...form, description: e.target.value })}
-                  placeholder="Short description..." style={{ ...inp, minHeight: '70px', resize: 'vertical' }} rows={2} />
-              </div>
-              {/* Description HI */}
-              <div style={{ gridColumn: '1/-1' }}>
-                <span style={labelStyle}>Description (Hindi)</span>
-                <textarea value={form.descriptionHindi} onChange={e => setForm({ ...form, descriptionHindi: e.target.value })}
-                  placeholder="विवरण..." style={{ ...inp, minHeight: '70px', resize: 'vertical' }} rows={2} />
-              </div>
-
-              {/* Image Upload */}
-              <div style={{ gridColumn: '1/-1' }}>
-                <span style={labelStyle}>Image</span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
-                  <input type="file" accept="image/*" onChange={handleImageUpload} style={{ fontSize: '13px' }} />
-                  {uploadingImage && (
-                    <span style={{ color: '#B88746', fontSize: '13px', fontFamily: 'Jost,sans-serif' }}>Uploading...</span>
-                  )}
-                  {form.imageUrl && (
-                    <img src={form.imageUrl} alt="preview"
-                      style={{ width: '64px', height: '64px', borderRadius: '10px', objectFit: 'cover', border: '1px solid #EFE7DB' }} />
-                  )}
-                </div>
-              </div>
-
-              {/* Variants */}
-              <div style={{ gridColumn: '1/-1', borderTop: '1px solid #EFE7DB', paddingTop: '16px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
-                  <span style={labelStyle}>Variants hain?</span>
-                  <button type="button" onClick={() => setForm({ ...form, hasVariants: !form.hasVariants })}
-                    style={{
-                      background: form.hasVariants ? '#fef9c3' : '#f3f4f6',
-                      color: form.hasVariants ? '#854d0e' : '#374151',
-                      border: 'none', borderRadius: '8px', padding: '6px 14px',
-                      fontSize: '13px', fontWeight: '700', cursor: 'pointer', fontFamily: 'Jost,sans-serif',
-                    }}>
-                    {form.hasVariants ? 'Haan' : 'Nahi'}
-                  </button>
-                </div>
-                {form.hasVariants && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    {form.variants.map((v, idx) => (
-                      <div key={idx} style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                        <input value={v.name} onChange={e => updateVariant(idx, 'name', e.target.value)}
-                          placeholder="Half / Full" style={{ ...inp, flex: 1 }} />
-                        <input value={v.nameHindi} onChange={e => updateVariant(idx, 'nameHindi', e.target.value)}
-                          placeholder="हिंदी" style={{ ...inp, width: '100px' }} />
-                        <input type="number" value={v.price} onChange={e => updateVariant(idx, 'price', e.target.value)}
-                          placeholder="₹" style={{ ...inp, width: '90px' }} />
-                        <button onClick={() => removeVariant(idx)}
-                          style={{ background: '#fee2e2', color: '#b91c1c', border: 'none', borderRadius: '8px', padding: '8px 12px', cursor: 'pointer', fontSize: '14px' }}>
-                          ✕
-                        </button>
-                      </div>
-                    ))}
-                    <button onClick={addVariant}
-                      style={{ ...ghostBtnStyle, alignSelf: 'flex-start', padding: '7px 16px', fontSize: '13px' }}>
-                      + Variant Add Karo
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
-              <button onClick={handleSave} disabled={saving} style={primaryBtnStyle}>
-                {saving ? 'Saving...' : editItem ? 'Update Karo' : 'Save Karo'}
-              </button>
-              <button onClick={resetForm} style={ghostBtnStyle}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Loading */}
-      {loading && (
-        <RowsSkeleton rows={4} height={72} />
-      )}
-
-      {/* Empty */}
-      {!loading && menuItems.length === 0 && (
-        <div style={{ textAlign: 'center', padding: '40px', color: '#6E6256' }}>
-          Koi item nahi hai. <strong>+ Item Add Karo</strong> se shuru karo.
-        </div>
-      )}
-
-      {/* Menu grid: Category -> Subcategory -> items */}
-      {!loading && Object.entries(grouped).map(([cat, subcats]) => (
-        <div key={cat} style={{ marginBottom: '32px' }}>
-          <h3 style={{ fontFamily: 'Cormorant Garamond,serif', fontSize: '22px', fontWeight: '700', color: '#1E1A17', marginBottom: '14px', borderBottom: '2px solid #B88746', paddingBottom: '8px' }}>
-            {cat}
-          </h3>
-
-          {Object.entries(subcats).map(([subcat, items]) => (
-            <div key={subcat} style={{ marginBottom: '20px', marginLeft: '4px' }}>
-              {/* Only show a subcategory heading when it's a real subcategory, or when there are multiple buckets in this category */}
-              {(subcat !== 'General' || Object.keys(subcats).length > 1) && (
-                <h4 style={{
-                  fontFamily: 'Jost,sans-serif', fontSize: '13px', fontWeight: '700',
-                  color: '#B88746', textTransform: 'uppercase', letterSpacing: '0.6px',
-                  marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '8px',
-                }}>
-                  <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#B88746' }} />
-                  {subcat}
-                </h4>
-              )}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(240px,1fr))', gap: '16px' }}>
-                {items.map(item => (
-                  <div key={item.id} style={{
-                    background: '#fff', borderRadius: '16px', overflow: 'hidden',
-                    border: item.isAvailable ? '1px solid #EFE7DB' : '2px solid #fee2e2',
-                    opacity: item.isAvailable ? 1 : 0.7,
-                    boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
-                  }}>
-                    {item.imageUrl ? (
-                      <img src={item.imageUrl} alt={item.name}
-                        style={{ width: '100%', height: '150px', objectFit: 'cover', display: 'block' }}
-                        onError={e => { e.target.style.display = 'none' }} />
-                    ) : (
-                      <div style={{ width: '100%', height: '80px', background: '#F5F0E8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '28px' }}>
-                        {item.isVeg !== false ? '🥬' : '🍖'}
-                      </div>
-                    )}
-                    <div style={{ padding: '12px 14px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <span style={{
-                              width: '12px', height: '12px', borderRadius: '3px', flexShrink: 0,
-                              border: `2px solid ${item.isVeg !== false ? '#2d7a2d' : '#c0392b'}`,
-                              background: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                            }}>
-                              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: item.isVeg !== false ? '#2d7a2d' : '#c0392b', display: 'block' }} />
-                            </span>
-                            <span style={{ fontWeight: '700', color: '#1E1A17', fontSize: '14px' }}>{item.name}</span>
-                          </div>
-                          {item.nameHindi && <p style={{ fontSize: '11px', color: '#6E6256', margin: '2px 0 0 18px' }}>{item.nameHindi}</p>}
-                        </div>
-                        <span style={{ fontFamily: 'Cormorant Garamond,serif', fontSize: '16px', fontWeight: '700', color: '#B88746', marginLeft: '8px' }}>
-                          ₹{item.price}
-                        </span>
-                      </div>
-
-                      {item.description && (
-                        <p style={{ fontSize: '11px', color: '#6E6256', margin: '4px 0', lineHeight: '1.4' }}>
-                          {item.description}
-                        </p>
-                      )}
-
-                      {item.isBestseller && (
-                        <span style={{ fontSize: '10px', background: '#fef9c3', color: '#854d0e', borderRadius: '6px', padding: '2px 8px', fontWeight: '700' }}>
-                          ⭐ Bestseller
-                        </span>
-                      )}
-
-                      {item.hasVariants && item.variants?.length > 0 && (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', margin: '6px 0' }}>
-                          {item.variants.map((v, i) => (
-                            <span key={i} style={{ fontSize: '10px', background: '#F5F0E8', color: '#6E6256', padding: '2px 8px', borderRadius: '20px' }}>
-                              {v.name}: ₹{v.price}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-
-                      <div style={{ display: 'flex', gap: '6px', marginTop: '10px' }}>
-                        <button onClick={() => toggleAvailability(item)}
-                          style={{
-                            flex: 1, padding: '7px', borderRadius: '8px', border: 'none',
-                            background: item.isAvailable ? '#dcfce7' : '#fee2e2',
-                            color: item.isAvailable ? '#15803d' : '#b91c1c',
-                            fontSize: '11px', fontWeight: '700', cursor: 'pointer', fontFamily: 'Jost,sans-serif',
-                          }}>
-                          {item.isAvailable ? '✅ Available' : '❌ Sold Out'}
-                        </button>
-                        <button onClick={() => handleEdit(item)}
-                          style={{ ...actionBtn('#eff6ff', '#1d4ed8'), padding: '7px 12px' }}>✏️</button>
-                        <button onClick={() => handleDelete(item.id)}
-                          style={{ ...actionBtn('#fee2e2', '#b91c1c'), padding: '7px 12px' }}>🗑️</button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      ))}
-    </div>
-  )
-}
-
-// ─── Main SuperAdmin component ────────────────────────────────────────────────
 function SuperAdmin({ onManageRestaurant }) {
   const navigate = useNavigate()
   const [activeTab, setActiveTab]       = useState('restaurants') // 'restaurants' | 'menu'
@@ -526,10 +78,13 @@ function SuperAdmin({ onManageRestaurant }) {
   const [staffModal, setStaffModal]     = useState(null)
   const [staffList, setStaffList]       = useState([])
   const [staffLoading, setStaffLoading] = useState(false)
-  const [staffForm, setStaffForm]       = useState({ email: '', password: '', role: 'chef' })
+  const [staffForm, setStaffForm]       = useState({ email: '', role: 'chef' })
   const [addingStaff, setAddingStaff]   = useState(false)
+  const [setupDialog, setSetupDialog]   = useState(null)
 
   const [deleteConfirm, setDeleteConfirm] = useState(null)
+  // Bug #69: Mark Paid / Reactivate need a payment record before the server accepts them.
+  const [paymentDraft, setPaymentDraft] = useState(null)
 
   const fetchRestaurants = async () => {
     try {
@@ -560,26 +115,52 @@ function SuperAdmin({ onManageRestaurant }) {
       setForm({ name: '', address: '', ownerEmail: '' })
       setShowForm(false)
       toast.success(`${form.name} add ho gaya 15-day trial ke saath`)
+      // Bug #54: the owner gets an admin account and a setup link right away.
+      if (res.data.owner?.setupLink) {
+        setSetupDialog({ title: 'Owner account ready', email: res.data.owner.email, link: res.data.owner.setupLink })
+      } else if (res.data.ownerError) {
+        toast.error(`Restaurant bana, lekin owner account nahi bana: ${res.data.ownerError}`)
+      }
     } catch (error) {
       toast.error(error.response?.data?.error || 'Add nahi hua')
     }
   }
 
-  const runAction = async (restaurant, action, days) => {
+  const runAction = async (restaurant, action, days, payment) => {
     try {
       setSavingId(`${restaurant.id}-${action}`)
-      const res = await api.patch(`/api/restaurants/${restaurant.id}/subscription`, { action, days })
+      const body = { action, days, ...(payment ? { payment } : {}) }
+      const res = await api.patch(`/api/restaurants/${restaurant.id}/subscription`, body)
       setRestaurants(prev => prev.map(item => item.id === restaurant.id ? res.data.restaurant : item))
       const messages = {
-        markPaid: '30 din ke liye paid mark hua',
-        extendTrial: 'Trial 15 din extend hua',
+        markPaid: '30 din ke liye paid mark hua (payment record save ho gaya)',
+        extendTrial: '15 din add ho gaye',
         suspend: 'Service suspend ho gayi',
-        reactivate: 'Service reactivate ho gayi',
+        reactivate: 'Service reactivate ho gayi (payment record save ho gaya)',
       }
       toast.success(messages[action] || 'Update ho gaya')
+      return true
     } catch (error) {
       toast.error(error.response?.data?.error || 'Update fail')
+      return false
     } finally { setSavingId(null) }
+  }
+
+  const openPaymentDraft = (restaurant, action) => {
+    setPaymentDraft({ restaurant, action, days: 30, amount: '2000', method: 'upi', reference: '' })
+  }
+
+  const submitPaymentDraft = async () => {
+    if (!paymentDraft) return
+    const { restaurant, action, days, amount, method, reference } = paymentDraft
+    if (!(Number(amount) > 0)) { toast.error('Amount sahi daalo'); return }
+    if (method !== 'cash' && reference.trim().length < 3) {
+      toast.error('UPI / bank / card reference daalo (kam se kam 3 characters)')
+      return
+    }
+    // Keep the form open on failure so the admin doesn't have to retype it.
+    const saved = await runAction(restaurant, action, days, { amount: Number(amount), method, reference: reference.trim() })
+    if (saved) setPaymentDraft(null)
   }
 
   const handleDelete = async () => {
@@ -588,7 +169,7 @@ function SuperAdmin({ onManageRestaurant }) {
       setSavingId(`${deleteConfirm.id}-delete`)
       await api.delete(`/api/restaurants/${deleteConfirm.id}`)
       setRestaurants(prev => prev.filter(r => r.id !== deleteConfirm.id))
-      toast.success(`${deleteConfirm.name} delete ho gaya`)
+      toast.success(`${deleteConfirm.name} archive ho gaya`)
       setDeleteConfirm(null)
     } catch (error) {
       toast.error(error.response?.data?.error || 'Delete fail')
@@ -605,20 +186,26 @@ function SuperAdmin({ onManageRestaurant }) {
   }
 
   const addStaff = async () => {
-    if (!staffForm.email || !staffForm.password) { toast.error('Email aur password required'); return }
-    if (staffForm.password.length < 6) { toast.error('Password kam se kam 6 characters ka hona chahiye'); return }
+    if (!staffForm.email) { toast.error('Email required hai'); return }
     try {
       setAddingStaff(true)
       const res = await api.post(`/api/restaurants/${staffModal.id}/staff`, staffForm)
-      setStaffList(prev => [...prev, res.data.staff])
-      setStaffForm({ email: '', password: '', role: 'chef' })
+      const created = res.data.staff
+      setStaffList(prev => [...prev, created])
+      setStaffForm({ email: '', role: 'chef' })
       toast.success(`${staffForm.role} account ban gaya`)
+      if (created.setupLink) {
+        setSetupDialog({ title: `${staffForm.role} account ready`, email: created.email, link: created.setupLink })
+      } else {
+        toast.error(created.setupLinkError || 'Setup link nahi bana')
+      }
     } catch (error) {
       toast.error(error.response?.data?.error || 'Staff create nahi hua')
     } finally { setAddingStaff(false) }
   }
 
   const removeStaff = async (uid) => {
+    if (!window.confirm('Is staff account ko remove karna hai? Ye undo nahi hoga.')) return
     try {
       await api.delete(`/api/restaurants/${staffModal.id}/staff/${uid}`)
       setStaffList(prev => prev.filter(s => s.uid !== uid))
@@ -778,12 +365,13 @@ function SuperAdmin({ onManageRestaurant }) {
                           <button onClick={() => handleManage(restaurant)} style={actionBtn('#B88746', '#fff')}>Manage</button>
                           <button onClick={() => openMenuPanel(restaurant)} style={actionBtn('#0d9488', '#fff')}>📋 Menu</button>
                           <button onClick={() => openStaffModal(restaurant)} style={actionBtn('#1d4ed8', '#fff')}>Staff</button>
-                          <button onClick={() => runAction(restaurant, 'markPaid', 30)} disabled={!!savingId} style={actionBtn('#15803d', '#fff')}>Mark Paid</button>
-                          <button onClick={() => runAction(restaurant, 'extendTrial', 15)} disabled={!!savingId} style={actionBtn('#854d0e', '#fff')}>+15 Trial</button>
-                          <button onClick={() => runAction(restaurant, status === 'suspended' ? 'reactivate' : 'suspend')} disabled={!!savingId}
-                            style={actionBtn(status === 'suspended' ? '#15803d' : '#6E6256', '#fff')}>
-                            {status === 'suspended' ? 'Reactivate' : 'Suspend'}
-                          </button>
+                          <button onClick={() => openPaymentDraft(restaurant, 'markPaid')} disabled={!!savingId} style={actionBtn('#15803d', '#fff')}>Mark Paid</button>
+                          <button onClick={() => runAction(restaurant, 'extendTrial', 15)} disabled={!!savingId} style={actionBtn('#854d0e', '#fff')}>+15 Days</button>
+                          {status === 'suspended' ? (
+                            <button onClick={() => openPaymentDraft(restaurant, 'reactivate')} disabled={!!savingId} style={actionBtn('#15803d', '#fff')}>Reactivate</button>
+                          ) : (
+                            <button onClick={() => runAction(restaurant, 'suspend')} disabled={!!savingId} style={actionBtn('#6E6256', '#fff')}>Suspend</button>
+                          )}
                           <button onClick={() => setDeleteConfirm(restaurant)} disabled={!!savingId} style={actionBtn('#b91c1c', '#fff')}>Delete</button>
                         </div>
                       </td>
@@ -799,7 +387,60 @@ function SuperAdmin({ onManageRestaurant }) {
 
       {/* ── MENU TAB ── */}
       {activeTab === 'menu' && menuRestaurant && (
-        <MenuPanel restaurant={menuRestaurant} />
+        <MenuManager restaurant={menuRestaurant} />
+      )}
+
+      {/* Payment record modal — Mark Paid / Reactivate */}
+      {paymentDraft && (
+        <div className="dp-overlay" style={overlayStyle}>
+          <div className="dp-dialog" style={modalStyle}>
+            <h2 style={{ fontFamily: 'Cormorant Garamond,serif', fontSize: '24px', color: '#1E1A17', marginTop: 0 }}>
+              {paymentDraft.action === 'reactivate' ? 'Reactivate' : 'Mark Paid'} — {paymentDraft.restaurant.name}
+            </h2>
+            <p style={{ color: '#6E6256', fontSize: '13px', lineHeight: '1.6' }}>
+              Payment ka record banega aur audit log mein jaayega. Plan: {paymentDraft.days} din.
+            </p>
+            <div style={{ display: 'grid', gap: '12px', marginTop: '16px' }}>
+              <label style={{ fontSize: '13px', color: '#6E6256' }}>
+                Amount (Rs.)
+                <input
+                  type="number" min="1" value={paymentDraft.amount}
+                  onChange={(e) => setPaymentDraft({ ...paymentDraft, amount: e.target.value })}
+                  style={{ width: '100%', marginTop: '4px', padding: '10px', borderRadius: '8px', border: '1px solid #e5dccd' }}
+                />
+              </label>
+              <label style={{ fontSize: '13px', color: '#6E6256' }}>
+                Payment method
+                <select
+                  value={paymentDraft.method}
+                  onChange={(e) => setPaymentDraft({ ...paymentDraft, method: e.target.value })}
+                  style={{ width: '100%', marginTop: '4px', padding: '10px', borderRadius: '8px', border: '1px solid #e5dccd' }}
+                >
+                  <option value="upi">UPI</option>
+                  <option value="bank_transfer">Bank transfer</option>
+                  <option value="card">Card</option>
+                  <option value="cash">Cash</option>
+                  <option value="other">Other</option>
+                </select>
+              </label>
+              <label style={{ fontSize: '13px', color: '#6E6256' }}>
+                Reference (UTR / txn id){paymentDraft.method === 'cash' ? ' — optional' : ''}
+                <input
+                  value={paymentDraft.reference}
+                  onChange={(e) => setPaymentDraft({ ...paymentDraft, reference: e.target.value })}
+                  placeholder="e.g. UTR 4189xxxxxx"
+                  style={{ width: '100%', marginTop: '4px', padding: '10px', borderRadius: '8px', border: '1px solid #e5dccd' }}
+                />
+              </label>
+            </div>
+            <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
+              <button onClick={submitPaymentDraft} disabled={!!savingId} style={primaryBtnStyle}>
+                {savingId ? 'Saving...' : 'Save payment'}
+              </button>
+              <button onClick={() => setPaymentDraft(null)} style={ghostBtnStyle}>Cancel</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Delete Confirm Modal */}
@@ -810,7 +451,7 @@ function SuperAdmin({ onManageRestaurant }) {
               Restaurant Delete Karo?
             </h2>
             <p style={{ color: '#6E6256', fontSize: '14px', lineHeight: '1.6' }}>
-              <strong style={{ color: '#b91c1c' }}>{deleteConfirm.name}</strong> aur uske saare staff accounts, menu, tables permanently delete ho jayenge. Ye action undo nahi ho sakta.
+              <strong style={{ color: '#b91c1c' }}>{deleteConfirm.name}</strong> archive ho jayega. Customers aur staff ke liye ye band ho jayega. Orders, bills, reports aur audit history save rahenge, kuch delete nahi hoga.
             </p>
             <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
               <button
@@ -872,6 +513,7 @@ function SuperAdmin({ onManageRestaurant }) {
                   >
                     <option value="chef">Chef</option>
                     <option value="receptionist">Receptionist</option>
+                    <option value="admin">Admin (owner)</option>
                   </select>
                 </label>
                 <label>
@@ -884,23 +526,21 @@ function SuperAdmin({ onManageRestaurant }) {
                     style={inputStyle}
                   />
                 </label>
-                <label>
-                  <span style={labelStyle}>Password</span>
-                  <input
-                    type="password"
-                    value={staffForm.password}
-                    onChange={(e) => setStaffForm({ ...staffForm, password: e.target.value })}
-                    placeholder="Min 6 characters"
-                    style={inputStyle}
-                  />
-                </label>
                 <button onClick={addStaff} disabled={addingStaff} style={primaryBtnStyle}>
-                  {addingStaff ? 'Creating...' : 'Create Account'}
+                  {addingStaff ? 'Creating...' : 'Create Account & Get Setup Link'}
                 </button>
               </div>
             </div>
           </div>
         </div>
+      )}
+      {setupDialog && (
+        <SetupLinkDialog
+          title={setupDialog.title}
+          email={setupDialog.email}
+          link={setupDialog.link}
+          onClose={() => setSetupDialog(null)}
+        />
       )}
     </div>
   )

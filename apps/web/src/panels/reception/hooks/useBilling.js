@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
-import { createSocket, ensureConnected } from '@/lib/socket'
+import { createSocket, emitAcked, ensureConnected } from '@/lib/socket'
 import axios from 'axios'
 import { auth } from '@/lib/firebase'
 import { playAlert } from '@/lib/kitchenAlertSound'
+import { toPaise, toRupees } from '../billingMath'
 
 const BACKEND_URL = import.meta.env.VITE_API_URL
 
@@ -26,6 +27,9 @@ export function useBilling(restaurantId) {
   const [connected,    setConnected]    = useState(false)
   const [waiterAlerts, setWaiterAlerts] = useState([])
   const [restaurant,   setRestaurant]   = useState(null)
+  // Bug #41/#9/#40: server refusals (sold-out, discount needs admin, bill
+  // changed, reason needed) are shown here instead of disappearing silently.
+  const [actionError,  setActionError]  = useState('')
   const [stats,        setStats]        = useState({
     dailyRevenue: 0,
     completedOrdersToday: 0,
@@ -72,10 +76,17 @@ export function useBilling(restaurantId) {
     fetchData()
     fetchHistory()
 
-    socket.on('connect',    joinRoom)
-    socket.on('disconnect', () => setConnected(false))
+    const registered = []
+    const listen = (event, handler) => {
+      socket.on(event, handler)
+      registered.push([event, handler])
+    }
+    const pendingTimers = []
 
-    socket.on('bill_update', (orderData) => {
+    listen('connect',    joinRoom)
+    listen('disconnect', () => setConnected(false))
+
+    listen('bill_update', (orderData) => {
       setOrders(prev => {
         const exists = prev.find(o => o.id === orderData.id)
         if (exists) return prev.map(o => o.id === orderData.id ? orderData : o)
@@ -83,7 +94,7 @@ export function useBilling(restaurantId) {
       })
     })
 
-    socket.on('order_received', (orderData) => {
+    listen('order_received', (orderData) => {
       setOrders(prev => {
         const exists = prev.find(o => o.id === orderData.id)
         if (exists) return prev
@@ -93,7 +104,7 @@ export function useBilling(restaurantId) {
       try { playAlert() } catch (e) { /* ignore */ }
     })
 
-    socket.on('order_updated', (orderData) => {
+    listen('order_updated', (orderData) => {
       setOrders(prev => {
         const exists = prev.find(o => o.id === orderData.id)
         if (exists) return prev.map(o => o.id === orderData.id ? orderData : o)
@@ -103,25 +114,37 @@ export function useBilling(restaurantId) {
       try { playAlert() } catch (e) { /* ignore */ }
     })
 
-    socket.on('status_changed', (updatedOrder) => {
+    listen('status_changed', (updatedOrder) => {
       setOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o))
     })
 
-    socket.on('bill_closed', (closedOrder) => {
+    listen('bill_closed', (closedOrder) => {
       const closedIds = closedOrder.orderIds || [closedOrder.id]
       setOrders(prev => prev.filter(o => !closedIds.includes(o.id)))
       fetchHistory()
     })
 
-    socket.on('order_cancelled', ({ orderId }) => {
+    listen('order_cancelled', ({ orderId }) => {
       setOrders(prev => prev.filter(o => o.id !== orderId))
     })
 
-    socket.on('stats_update', (updatedStats) => {
+    listen('stats_update', (updatedStats) => {
       setStats(updatedStats)
     })
 
-    socket.on('waiter_called', (data) => {
+    // Server refused an action: explain why and re-sync so the screen matches the database.
+    listen('close_bill_error', (err) => {
+      setActionError(err?.error || 'Bill settle nahi hua. Dobara try karo.')
+      fetchData()
+      fetchHistory()
+    })
+
+    listen('cancel_order_error', (err) => {
+      setActionError(err?.error || 'Order cancel nahi hua.')
+      fetchData()
+    })
+
+    listen('waiter_called', (data) => {
       if (String(data.restaurantId) !== String(restaurantId)) return
       const alert = {
         id: `${data.tableId}_${data.calledAt}`,
@@ -140,70 +163,106 @@ export function useBilling(restaurantId) {
 
       try { playAlert() } catch (e) { /* ignore */ }
 
-      setTimeout(() => {
+      const dismiss = setTimeout(() => {
         setWaiterAlerts(prev => prev.filter(a => a.id !== alert.id))
       }, 30_000)
+      pendingTimers.push(dismiss)
     })
 
     return () => {
-      socket.off('connect',         joinRoom)
-      socket.off('disconnect')
-      socket.off('bill_update')
-      socket.off('order_received')
-      socket.off('order_updated')
-      socket.off('status_changed')
-      socket.off('bill_closed')
-      socket.off('order_cancelled')
-      socket.off('stats_update')
-      socket.off('waiter_called')
+      registered.forEach(([event, handler]) => socket.off(event, handler))
+      pendingTimers.forEach(clearTimeout)
     }
   }, [restaurantId, fetchData, fetchHistory])
 
-  const closeBill = useCallback((tableGroup, settlement) => {
-    const socket = getSocket()
-    const orderIds = tableGroup.orders.map(order => order.id)
-    socket.emit('close_bill', {
-      restaurantId,
-      tableNumber: tableGroup.tableNumber,
-      orderIds,
-      settlement,
-    })
-    setOrders(prev => prev.filter(o => !orderIds.includes(o.id)))
+  // settlement: { paymentMode, discountAmount, paymentReference, notes, expectedPayableAmount }
+  // GST and service charge are NOT sent: the server takes them from restaurant settings (Bug #9).
+  // Bug #23: when the server refuses an action, the screen re-reads the open orders
+  // so it shows what actually happened, not the optimistic guess.
+  const resyncOrders = useCallback(async () => {
+    try {
+      const token = auth.currentUser ? await auth.currentUser.getIdToken() : null
+      const res = await axios.get(`${BACKEND_URL}/api/orders/${restaurantId}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      setOrders(res.data.orders || [])
+    } catch {
+      // Keep the current view. The next socket event corrects it.
+    }
   }, [restaurantId])
 
-  const markItemServed = useCallback((order, item) => {
+  // settlement: { paymentMode, discountAmount, paymentReference, notes, expectedPayableAmount }
+  // GST and service charge are NOT sent: the server takes them from restaurant settings (Bug #9).
+  const closeBill = useCallback(async (tableGroup, settlement) => {
+    const socket = getSocket()
+    const orderIds = tableGroup.orders.map(order => order.id)
+    setActionError('')
+    setOrders(prev => prev.filter(o => !orderIds.includes(o.id)))
+    const result = await emitAcked(socket, 'close_bill', {
+      restaurantId,
+      orderIds,
+      settlement: {
+        paymentMode: settlement.paymentMode,
+        discountAmount: settlement.discountAmount,
+        paymentReference: settlement.paymentReference,
+        notes: settlement.notes,
+        expectedPayableAmount: settlement.payableAmount,
+      },
+    })
+    if (!result.ok) {
+      setActionError(result.error || 'The bill could not be settled. Check the totals and try again.')
+      resyncOrders()
+    }
+    return result
+  }, [restaurantId, resyncOrders])
+
+  const markItemServed = useCallback(async (order, item) => {
     const socket = getSocket()
     const itemKey = item.lineId || item.id
-    socket.emit('item_status', {
-      restaurantId,
-      orderId: order.id,
-      itemKey,
-      status: 'served',
-    })
-    setOrders(prev =>
+    const previousStatus = item.status || 'new'
+    const setItemStatus = (status) => setOrders(prev =>
       prev.map(existingOrder => {
         if (existingOrder.id !== order.id) return existingOrder
         return {
           ...existingOrder,
           items: existingOrder.items.map(orderItem =>
-            (orderItem.lineId || orderItem.id) === itemKey
-              ? { ...orderItem, status: 'served' }
-              : orderItem
+            (orderItem.lineId || orderItem.id) === itemKey ? { ...orderItem, status } : orderItem
           ),
         }
       })
     )
+    setItemStatus('served')
+    const result = await emitAcked(socket, 'item_status', {
+      restaurantId,
+      orderId: order.id,
+      itemKey,
+      status: 'served',
+    })
+    if (!result.ok) {
+      setItemStatus(previousStatus)
+      setActionError(result.error || 'The item could not be marked served.')
+    }
+    return result
   }, [restaurantId])
 
-  const cancelOrder = useCallback((orderId, tableNumber, reason = '') => {
+  // Cancels ONE order. Other orders on the same table stay open (Bug #41).
+  const cancelOrder = useCallback(async (orderId, tableNumber, reason = '') => {
     const socket = getSocket()
-    socket.emit('cancel_order', { restaurantId, orderId, reason })
+    setActionError('')
     setOrders(prev => prev.filter(o => o.id !== orderId))
-  }, [restaurantId])
+    const result = await emitAcked(socket, 'cancel_order', { restaurantId, orderId, reason })
+    if (!result.ok) {
+      setActionError(result.error || 'The order could not be cancelled.')
+      resyncOrders()
+    }
+    return result
+  }, [restaurantId, resyncOrders])
 
   const dismissWaiterAlert = useCallback((alertId) => {
     setWaiterAlerts(prev => prev.filter(a => a.id !== alertId))
   }, [])
+
+  const clearActionError = useCallback(() => setActionError(''), [])
 
   // Manual reset daily stats
   const resetStats = useCallback(async () => {
@@ -216,21 +275,26 @@ export function useBilling(restaurantId) {
     }
   }, [restaurantId])
 
-  const tableGroups = orders.reduce((groups, order) => {
-    const table = order.tableNumber
-    if (!groups[table]) {
-      groups[table] = {
-        tableNumber: table,
-        orders: [],
-        totalAmount: 0,
-        allItems: [],
+  // Bug #42/#45: cancelled (and already closed) orders never make it into a bill or the pending total.
+  const tableGroups = orders
+    .filter(order => order.status !== 'cancelled' && order.status !== 'closed')
+    .reduce((groups, order) => {
+      const table = order.tableNumber
+      if (!groups[table]) {
+        groups[table] = {
+          tableNumber: table,
+          orders: [],
+          totalPaise: 0,
+          totalAmount: 0,
+          allItems: [],
+        }
       }
-    }
-    groups[table].orders.push(order)
-    groups[table].totalAmount += order.totalAmount
-    groups[table].allItems = [...groups[table].allItems, ...order.items]
-    return groups
-  }, {})
+      groups[table].orders.push(order)
+      groups[table].totalPaise += toPaise(order.totalAmount)
+      groups[table].totalAmount = toRupees(groups[table].totalPaise)
+      groups[table].allItems = [...groups[table].allItems, ...order.items]
+      return groups
+    }, {})
 
   return {
     orders,
@@ -245,5 +309,7 @@ export function useBilling(restaurantId) {
     cancelOrder,
     dismissWaiterAlert,
     resetStats,
+    actionError,
+    clearActionError,
   }
 }

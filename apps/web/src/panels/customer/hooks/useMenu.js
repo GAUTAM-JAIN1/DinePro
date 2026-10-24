@@ -30,12 +30,6 @@ export function useMenu(restaurantId) {
         if (!active) return
         setRestaurant(nextRestaurant)
 
-        if (nextRestaurant?.subscription?.isServiceEnabled === false) {
-          setServiceUnavailable(true)
-          setMenu([])
-          return
-        }
-
         const menuRes = await axios.get(`${BACKEND_URL}/api/menu/${restaurantId}`)
         if (!active) return
         setMenu(menuRes.data.menu || [])

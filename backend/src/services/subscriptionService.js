@@ -1,6 +1,9 @@
+const { HttpError } = require('./billing')
+
 const TRIAL_DAYS = 15
 const BILLING_DAYS = 30
 const PLAN_AMOUNT = 2000
+const MAX_DAYS = 365
 
 function addDays(date, days) {
   const next = new Date(date)
@@ -65,15 +68,44 @@ function getDaysRemaining(endDate, now = new Date()) {
   return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)))
 }
 
-function buildSubscriptionUpdate(action, options = {}) {
-  const now = new Date()
-  const days = Number(options.days) || BILLING_DAYS
+/** True when the restaurant is active and its paid period has not run out yet. */
+function isPaidActive(current, now) {
+  return Boolean(
+    current?.subscriptionStatus === 'active' &&
+    current.currentPeriodEnd &&
+    new Date(current.currentPeriodEnd) >= now
+  )
+}
 
-  if (action === 'markPaid') {
+function resolveDays(days, fallback) {
+  if (days === undefined || days === null || days === '') return fallback
+  const value = Number(days)
+  if (!Number.isInteger(value) || value < 1 || value > MAX_DAYS) {
+    throw new HttpError(400, `days must be a whole number between 1 and ${MAX_DAYS}`)
+  }
+  return value
+}
+
+/**
+ * Computes the Firestore update for a subscription action.
+ *
+ * @param current  the restaurant doc as it is right now (needed so that
+ *                 renewals and grants build on the existing period)
+ */
+function buildSubscriptionUpdate(action, { days, current = {}, now = new Date() } = {}) {
+  if (action === 'markPaid' || action === 'reactivate') {
+    const billingDays = resolveDays(days, BILLING_DAYS)
+    const paidNow = isPaidActive(current, now)
+    // Bug #67: an early renewal stacks on the remaining paid days instead of
+    // throwing them away. An expired or new period starts from today.
+    const base = paidNow ? new Date(current.currentPeriodEnd) : now
+    const currentPeriodStart = paidNow && current.currentPeriodStart
+      ? current.currentPeriodStart
+      : toIso(now)
     return {
       subscriptionStatus: 'active',
-      currentPeriodStart: toIso(now),
-      currentPeriodEnd: toIso(addDays(now, days)),
+      currentPeriodStart,
+      currentPeriodEnd: toIso(addDays(base, billingDays)),
       lastPaidAt: toIso(now),
       planAmount: PLAN_AMOUNT,
       suspendedAt: null,
@@ -81,10 +113,17 @@ function buildSubscriptionUpdate(action, options = {}) {
   }
 
   if (action === 'extendTrial') {
-    const trialDays = Number(options.days) || TRIAL_DAYS
+    const extraDays = resolveDays(days, TRIAL_DAYS)
+    // Bug #27: a paid restaurant must never be pushed back into trial status.
+    // The extra days go onto the paid period and the status stays 'active'.
+    if (isPaidActive(current, now)) {
+      return {
+        currentPeriodEnd: toIso(addDays(new Date(current.currentPeriodEnd), extraDays)),
+      }
+    }
     return {
       subscriptionStatus: 'trial',
-      trialEndsAt: toIso(addDays(now, trialDays)),
+      trialEndsAt: toIso(addDays(now, extraDays)),
       planAmount: PLAN_AMOUNT,
       suspendedAt: null,
     }
@@ -97,18 +136,7 @@ function buildSubscriptionUpdate(action, options = {}) {
     }
   }
 
-  if (action === 'reactivate') {
-    return {
-      subscriptionStatus: 'active',
-      currentPeriodStart: toIso(now),
-      currentPeriodEnd: toIso(addDays(now, days)),
-      lastPaidAt: toIso(now),
-      planAmount: PLAN_AMOUNT,
-      suspendedAt: null,
-    }
-  }
-
-  throw new Error('Invalid subscription action')
+  throw new HttpError(400, 'Invalid subscription action')
 }
 
 module.exports = {
@@ -118,4 +146,5 @@ module.exports = {
   buildSubscriptionUpdate,
   getDefaultSubscription,
   getSubscriptionState,
+  isPaidActive,
 }

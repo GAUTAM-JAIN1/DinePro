@@ -1,13 +1,39 @@
 const { db } = require('./firebaseAdmin')
+const { getTableByIdentifier } = require('./tableService')
+const { dayKeyFor, hourFor, dayBounds, resolveTimezone } = require('./dayKey')
+const { writeAuditInTransaction, writeAudit } = require('./auditService')
+const {
+  HttpError,
+  OPEN_STATUSES,
+  MERGEABLE_STATUSES,
+  toPaise,
+  toRupees,
+  newLineId,
+  orderSubtotalPaise,
+  resolveOrderLines,
+  computeSettlement,
+  toSettlementRecord,
+  assertDiscountAllowed,
+  assertExpectedTotal,
+  allocatePayable,
+  formatInvoiceNumber,
+} = require('./billing')
 
-const orderCol = (restaurantId) =>
-  db.collection('restaurants').doc(restaurantId).collection('orders')
+const restaurantRef = (restaurantId) => db.collection('restaurants').doc(restaurantId)
+const orderCol = (restaurantId) => restaurantRef(restaurantId).collection('orders')
+const menuCol = (restaurantId) => restaurantRef(restaurantId).collection('menu')
+const tableCol = (restaurantId) => restaurantRef(restaurantId).collection('tables')
+const orderKeyCol = (restaurantId) => restaurantRef(restaurantId).collection('orderKeys')
 
-const calcTotal = (items) =>
-  items.reduce((sum, item) => sum + item.price * item.quantity, 0)
+// Idempotency records only need to outlive a client's retry window. Add a
+// Firestore TTL policy on orderKeys.expiresAt to delete them automatically.
+const ORDER_KEY_TTL_MS = 2 * 24 * 60 * 60 * 1000
 
-const newLineId = () => `line_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-const DUPLICATE_WINDOW_MS = 5000
+const fromDoc = (doc) => ({ id: doc.id, ...doc.data() })
+
+const actorLabel = (actor) => actor?.email || actor?.uid || 'system'
+
+const calcTotal = (items) => toRupees(orderSubtotalPaise({ items }))
 
 const normalizeItems = (items = [], fallbackStatus = 'new') =>
   items.map((item) => ({
@@ -28,296 +54,414 @@ const deriveOrderStatus = (items = []) => {
   return 'new'
 }
 
-const toNumber = (value, fallback = 0) => {
-  const number = Number(value)
-  return Number.isFinite(number) ? number : fallback
-}
-
-const roundMoney = (value) => Math.round(toNumber(value) * 100) / 100
-
-const itemSignature = (items = []) =>
-  normalizeItems(items)
-    .map((item) => ({
-      id: item.id,
-      price: toNumber(item.price),
-      quantity: toNumber(item.quantity),
-      variant: item.variant || '',
-      specialInstructions: (item.specialInstructions || '').trim(),
-    }))
-    .sort((a, b) => `${a.id}:${a.variant}`.localeCompare(`${b.id}:${b.variant}`))
-
-const sameOrderPayload = (leftItems = [], rightItems = []) =>
-  JSON.stringify(itemSignature(leftItems)) === JSON.stringify(itemSignature(rightItems))
-
-const assertNotDuplicateOrder = (orders, orderData) => {
-  const now = Date.now()
-  const incomingNote = (orderData.specialInstructions || '').trim()
-
-  const duplicate = orders.find((order) => {
-    const timestamp = new Date(order.updatedAt || order.createdAt).getTime()
-    if (!timestamp || now - timestamp > DUPLICATE_WINDOW_MS) return false
-    const existingItems = order.newItems?.length ? order.newItems : order.items
-    const existingNote = (order.specialInstructions || '').trim()
-    return incomingNote === existingNote && sameOrderPayload(existingItems, orderData.items || [])
-  })
-
-  if (duplicate) {
-    const error = new Error('Duplicate order blocked. Please wait a few seconds before ordering the same items again.')
-    error.statusCode = 409
-    throw error
-  }
-}
-
-const buildSettlement = (subtotal, options = {}) => {
-  const discountAmount = Math.min(Math.max(toNumber(options.discountAmount), 0), subtotal)
-  const serviceChargeAmount = Math.max(toNumber(options.serviceChargeAmount), 0)
-  const gstPercent = Math.max(toNumber(options.gstPercent), 0)
-  const taxableAmount = Math.max(subtotal - discountAmount + serviceChargeAmount, 0)
-  const gstAmount = roundMoney((taxableAmount * gstPercent) / 100)
-  const payableAmount = roundMoney(taxableAmount + gstAmount)
-
+const normalizeMenuDoc = (snap) => {
+  const data = snap.data()
   return {
-    subtotal: roundMoney(subtotal),
-    discountAmount: roundMoney(discountAmount),
-    serviceChargeAmount: roundMoney(serviceChargeAmount),
-    gstPercent: roundMoney(gstPercent),
-    gstAmount,
-    payableAmount,
-    paymentMode: options.paymentMode || 'cash',
-    paymentReference: options.paymentReference || '',
-    notes: options.notes || '',
+    id: snap.id,
+    ...data,
+    isAvailable: data.isAvailable ?? data.available ?? true,
   }
 }
 
-const isToday = (dateStr) => {
-  if (!dateStr) return false
-  const d = new Date(dateStr)
-  const t = new Date()
-  return d.getFullYear() === t.getFullYear() &&
-    d.getMonth() === t.getMonth() &&
-    d.getDate() === t.getDate()
-}
+/**
+ * Customer places or adds to an order.
+ *
+ * Everything that decides money happens in ONE Firestore transaction:
+ *   - the table must exist and be active                       (Bug #11)
+ *   - prices and availability come from the menu, read here    (Bug #1, #11)
+ *   - the open bill for the table is found and merged into     (Bug #6, #7)
+ *   - a retry with the same idempotencyKey returns the first result (Bug #51, #38)
+ *
+ * Writing the table doc in every transaction makes two simultaneous orders for
+ * the same table conflict, so the second one retries and sees the first bill.
+ * That is what closes the "two open bills" race (Bug #6).
+ *
+ * Returns { order, replayed }. replayed=true means this key was already used,
+ * so nothing new was written and the caller must not broadcast it again.
+ */
+async function upsertOrder(restaurantId, { tableId, items, specialInstructions = '', idempotencyKey }) {
+  const table = await getTableByIdentifier(restaurantId, tableId)
+  if (!table) throw new HttpError(404, 'Table not found', { code: 'TABLE_NOT_FOUND' })
+  if (table.isActive === false) throw new HttpError(403, 'Table is inactive', { code: 'TABLE_INACTIVE' })
 
-const getOpenOrdersForTable = async (restaurantId, tableId) => {
-  const snap = await orderCol(restaurantId)
-    .where('tableId', '==', tableId)
+  const canonicalTableId = table.id
+  const keyRef = orderKeyCol(restaurantId).doc(idempotencyKey)
+  const tableRef = tableCol(restaurantId).doc(canonicalTableId)
+  const openBillsQuery = orderCol(restaurantId)
+    .where('tableId', '==', canonicalTableId)
     .where('status', '!=', 'closed')
-    .get()
-  return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }))
-}
+  const menuIds = [...new Set(items.map((item) => item.id))]
 
-const getOpenOrderForTable = async (restaurantId, tableId) => {
-  const orders = await getOpenOrdersForTable(restaurantId, tableId)
-  if (orders.length === 0) return null
-  return orders.find(order => order.status !== 'ready' && order.status !== 'served') || null
-}
+  return db.runTransaction(async (tx) => {
+    // ---- reads: all of them come before any write ----
+    const keySnap = await tx.get(keyRef)
+    if (keySnap.exists) {
+      const previous = await tx.get(orderCol(restaurantId).doc(keySnap.data().orderId))
+      if (previous.exists) return { order: fromDoc(previous), replayed: true }
+    }
 
-const createOrder = async (restaurantId, orderData) => {
-  const now = new Date().toISOString()
-  const items = normalizeItems(orderData.items || [], 'new')
-  const totalAmount = calcTotal(items)
+    const tableSnap = await tx.get(tableRef)
+    if (!tableSnap.exists || tableSnap.data().isActive === false) {
+      throw new HttpError(403, 'Table is not accepting orders right now', { code: 'TABLE_INACTIVE' })
+    }
 
-  const docRef = await orderCol(restaurantId).add({
-    restaurantId,
-    tableId: orderData.tableId,
-    tableNumber: orderData.tableNumber,
-    items,
-    newItems: items,
-    specialInstructions: orderData.specialInstructions || '',
-    totalAmount,
-    status: 'new',
-    createdAt: now,
-    updatedAt: now,
+    const menuSnaps = await Promise.all(menuIds.map((id) => tx.get(menuCol(restaurantId).doc(id))))
+    const menuById = new Map(
+      menuSnaps.filter((snap) => snap.exists).map((snap) => [snap.id, normalizeMenuDoc(snap)])
+    )
+
+    const openSnap = await tx.get(openBillsQuery)
+    const openOrders = openSnap.docs.map(fromDoc).filter((order) => OPEN_STATUSES.includes(order.status))
+
+    // ---- compute: may throw, no writes yet ----
+    const now = new Date().toISOString()
+    const lines = resolveOrderLines(items, menuById)
+    const tableNumber = String(tableSnap.data().tableNumber ?? table.tableNumber ?? canonicalTableId)
+    const target = openOrders.find((order) => MERGEABLE_STATUSES.includes(order.status))
+
+    if (target) {
+      const mergedItems = [...normalizeItems(target.items, target.status || 'new'), ...lines]
+      const updates = {
+        items: mergedItems,
+        newItems: lines,
+        totalAmount: calcTotal(mergedItems),
+        status: 'new',
+        updatedAt: now,
+      }
+      if (specialInstructions) updates.specialInstructions = specialInstructions
+
+      tx.update(orderCol(restaurantId).doc(target.id), updates)
+      tx.update(tableRef, { updatedAt: now })
+      tx.set(keyRef, { orderId: target.id, createdAt: now, expiresAt: new Date(Date.now() + ORDER_KEY_TTL_MS).toISOString() })
+      return { order: { ...target, ...updates, id: target.id }, replayed: false }
+    }
+
+    const newRef = orderCol(restaurantId).doc()
+    const order = {
+      restaurantId,
+      tableId: canonicalTableId,
+      tableNumber,
+      items: lines,
+      newItems: lines,
+      specialInstructions,
+      totalAmount: calcTotal(lines),
+      status: 'new',
+      createdAt: now,
+      updatedAt: now,
+    }
+    tx.set(newRef, order)
+    tx.update(tableRef, { updatedAt: now })
+    tx.set(keyRef, { orderId: newRef.id, createdAt: now, expiresAt: new Date(Date.now() + ORDER_KEY_TTL_MS).toISOString() })
+    return { order: { id: newRef.id, ...order }, replayed: false }
   })
-
-  const doc = await docRef.get()
-  return { id: doc.id, ...doc.data() }
 }
 
-const addItemsToOrder = async (restaurantId, orderId, newItems, specialInstructions = '') => {
+// Bug #49: a whole-order command only moves items that are still behind it.
+// "Mark preparing" must not drag a ready item back to preparing.
+const STATUS_SOURCES = {
+  preparing: ['new', 'preparing'],
+  ready: ['new', 'preparing'],
+  served: ['new', 'preparing', 'ready'],
+}
+
+function applyOrderStatus(items, target) {
+  const sources = STATUS_SOURCES[target]
+  return items.map((item) => (sources.includes(item.status || 'new') ? { ...item, status: target } : item))
+}
+
+/** Kitchen status change for a whole order (preparing / ready / served). */
+async function updateOrder(restaurantId, orderId, updates) {
   const ref = orderCol(restaurantId).doc(orderId)
-  const doc = await ref.get()
-  if (!doc.exists) throw new Error('Order not found')
-  const existing = doc.data()
 
-  const normalizedNewItems = normalizeItems(newItems, 'new')
-  const mergedItems = [
-    ...normalizeItems(existing.items, existing.status || 'new'),
-    ...normalizedNewItems,
-  ]
-  const totalAmount = calcTotal(mergedItems)
-  const now = new Date().toISOString()
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref)
+    if (!snap.exists) throw new HttpError(404, 'Order not found', { code: 'ORDER_NOT_FOUND' })
+    const existing = snap.data()
+    const now = new Date().toISOString()
+    const data = { ...updates, updatedAt: now }
 
-  const updates = {
-    items: mergedItems,
-    newItems: normalizedNewItems,
-    totalAmount,
-    status: 'new',
-    updatedAt: now,
-  }
+    if (updates.status === 'preparing' || updates.status === 'ready' || updates.status === 'served') {
+      data.items = applyOrderStatus(normalizeItems(existing.items, existing.status || 'new'), updates.status)
+      data.newItems = applyOrderStatus(normalizeItems(existing.newItems || [], existing.status || 'new'), updates.status)
+      // The order's status follows its items, so it can't say "preparing" while every item is ready.
+      data.status = deriveOrderStatus(data.items)
+    }
 
-  if (specialInstructions) updates.specialInstructions = specialInstructions
+    if (updates.status === 'ready') data.completedAt = now
+    if (updates.status === 'served') data.servedAt = now
+    if (updates.status === 'closed') data.closedAt = now
 
-  await ref.update(updates)
-  const updated = await ref.get()
-  return { id: updated.id, ...updated.data() }
+    tx.update(ref, data)
+    return { id: orderId, ...existing, ...data }
+  })
 }
 
-const upsertOrder = async (restaurantId, orderData) => {
-  const openOrders = await getOpenOrdersForTable(restaurantId, orderData.tableId)
-  assertNotDuplicateOrder(openOrders, orderData)
-
-  const openOrder = openOrders.find(order => order.status !== 'ready' && order.status !== 'served') || null
-
-  if (openOrder) {
-    return await addItemsToOrder(restaurantId, openOrder.id, orderData.items, orderData.specialInstructions || '')
-  } else {
-    return await createOrder(restaurantId, orderData)
-  }
-}
-
-const updateOrder = async (restaurantId, orderId, updates) => {
+/** Kitchen status change for one line item. Transactional so it cannot wipe items added at the same moment (Bug #7). */
+async function updateOrderItemStatus(restaurantId, orderId, itemKey, status) {
   const ref = orderCol(restaurantId).doc(orderId)
-  const now = new Date().toISOString()
-  const data = { ...updates, updatedAt: now }
 
-  if (updates.status === 'preparing' || updates.status === 'ready' || updates.status === 'served') {
-    const doc = await ref.get()
-    const existing = doc.exists ? doc.data() : {}
-    data.items = normalizeItems(existing.items, existing.status || 'new').map((item) =>
-      item.status === 'served' ? item : { ...item, status: updates.status }
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref)
+    if (!snap.exists) throw new HttpError(404, 'Order not found', { code: 'ORDER_NOT_FOUND' })
+
+    const existing = snap.data()
+    const matchesItem = (item) => item.lineId === itemKey || item.id === itemKey
+    const items = normalizeItems(existing.items, existing.status || 'new').map((item) =>
+      matchesItem(item) ? { ...item, status } : item
     )
-    data.newItems = normalizeItems(existing.newItems || [], existing.status || 'new').map((item) =>
-      item.status === 'served' ? item : { ...item, status: updates.status }
+    const newItems = normalizeItems(existing.newItems || [], existing.status || 'new').map((item) =>
+      matchesItem(item) ? { ...item, status } : item
     )
-  }
+    const orderStatus = deriveOrderStatus(items)
+    const now = new Date().toISOString()
+    const updates = { items, newItems, status: orderStatus, updatedAt: now }
 
-  if (updates.status === 'ready') data.completedAt = now
-  if (updates.status === 'served') data.servedAt = now
-  if (updates.status === 'closed') data.closedAt = now
+    if (orderStatus === 'ready') updates.completedAt = now
+    if (orderStatus === 'served') updates.servedAt = now
 
-  await ref.update(data)
-  const doc = await ref.get()
-  return { id: doc.id, ...doc.data() }
+    tx.update(ref, updates)
+    return { id: orderId, ...existing, ...updates }
+  })
 }
 
-const updateOrderItemStatus = async (restaurantId, orderId, itemKey, status) => {
-  const ref = orderCol(restaurantId).doc(orderId)
-  const doc = await ref.get()
-  if (!doc.exists) throw new Error('Order not found')
-
-  const existing = doc.data()
-  const matchesItem = (item) => item.lineId === itemKey || item.id === itemKey
-  const items = normalizeItems(existing.items, existing.status || 'new').map((item) =>
-    matchesItem(item) ? { ...item, status } : item
-  )
-  const newItems = normalizeItems(existing.newItems || [], existing.status || 'new').map((item) =>
-    matchesItem(item) ? { ...item, status } : item
-  )
-  const orderStatus = deriveOrderStatus(items)
-  const now = new Date().toISOString()
-  const updates = { items, newItems, status: orderStatus, updatedAt: now }
-
-  if (orderStatus === 'ready') updates.completedAt = now
-  if (orderStatus === 'served') updates.servedAt = now
-
-  await ref.update(updates)
-  const updated = await ref.get()
-  return { id: updated.id, ...updated.data() }
-}
-
+/** Open orders for the staff screens. Cancelled orders are never listed (Bug #8). */
 const getRestaurantOrders = async (restaurantId) => {
   const snap = await orderCol(restaurantId)
     .where('status', '!=', 'closed')
     .orderBy('status')
     .orderBy('createdAt', 'desc')
     .get()
-  return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+  return snap.docs.map(fromDoc).filter((order) => order.status !== 'cancelled')
 }
 
-const closeBill = async (restaurantId, tableNumber, orderIds, settlementOptions = {}) => {
+/**
+ * Settles the bill for the given orders. Server-authoritative (Bug #9, #40, #43, #44):
+ *   - GST and service charge come from restaurant settings
+ *   - discounts above the receptionist cap need an admin actor
+ *   - the cashier's expectedPayableAmount must match what the server computes
+ *   - the order set must be the table's full set of open orders, so an order
+ *     that arrived while the bill was open is not settled unseen and does not
+ *     stay open afterwards
+ *   - closed or cancelled orders can't be settled again
+ *   - the invoice number comes from a per-restaurant counter, not the client
+ */
+async function closeBill(restaurantId, { orderIds, settlement: input = {}, actor = null, isAdmin = false }) {
+  const ids = [...new Set(orderIds || [])]
+  if (ids.length === 0) throw new HttpError(400, 'orderIds is required', { code: 'NO_ORDERS' })
+
   const now = new Date().toISOString()
-  const batch = db.batch()
-  let totalAmount = 0
+  const rRef = restaurantRef(restaurantId)
+  const counterRef = rRef.collection('counters').doc('invoices')
 
-  let ordersToClose = []
-  if (orderIds && orderIds.length > 0) {
-    for (const id of orderIds) {
-      const doc = await orderCol(restaurantId).doc(id).get()
-      if (doc.exists) ordersToClose.push({ id: doc.id, ...doc.data() })
+  return db.runTransaction(async (tx) => {
+    // ---- reads ----
+    const restSnap = await tx.get(rRef)
+    if (!restSnap.exists) throw new HttpError(404, 'Restaurant not found', { code: 'RESTAURANT_NOT_FOUND' })
+    const restaurant = restSnap.data()
+
+    const orderSnaps = await Promise.all(ids.map((id) => tx.get(orderCol(restaurantId).doc(id))))
+    const orders = orderSnaps.map((snap, index) => {
+      if (!snap.exists) throw new HttpError(404, `Order not found: ${ids[index]}`, { code: 'ORDER_NOT_FOUND' })
+      return fromDoc(snap)
+    })
+
+    for (const order of orders) {
+      if (order.status === 'closed') {
+        throw new HttpError(409, `Order ${order.id} is already settled`, { code: 'ALREADY_SETTLED', orderId: order.id })
+      }
+      if (order.status === 'cancelled') {
+        throw new HttpError(409, `Order ${order.id} was cancelled. Refresh the bill.`, { code: 'ORDER_CANCELLED', orderId: order.id })
+      }
     }
-  } else {
-    const snap = await orderCol(restaurantId)
-      .where('tableNumber', '==', String(tableNumber))
-      .where('status', '!=', 'closed')
-      .get()
-    ordersToClose = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-  }
 
-  totalAmount = ordersToClose.reduce((sum, order) => sum + order.totalAmount, 0)
-  const settlement = buildSettlement(totalAmount, settlementOptions)
+    const tableIds = [...new Set(orders.map((order) => order.tableId).filter(Boolean))]
+    if (tableIds.length !== 1) {
+      throw new HttpError(400, 'One settlement can only cover orders from a single table', { code: 'MIXED_TABLES' })
+    }
+    const tableId = tableIds[0]
 
-  ordersToClose.forEach(order => {
-    const ref = orderCol(restaurantId).doc(order.id)
-    const ratio = totalAmount > 0 ? order.totalAmount / totalAmount : 0
-    const settledAmount = roundMoney(settlement.payableAmount * ratio)
-    batch.update(ref, {
-      status: 'closed',
-      closedAt: now,
-      updatedAt: now,
-      settledAmount,
-      settlement: {
-        ...settlement,
-        orderSubtotal: roundMoney(order.totalAmount),
+    const tableRef = tableCol(restaurantId).doc(tableId)
+    const tableSnap = await tx.get(tableRef)
+    const openSnap = await tx.get(
+      orderCol(restaurantId).where('tableId', '==', tableId).where('status', '!=', 'closed')
+    )
+    const counterSnap = await tx.get(counterRef)
+
+    // ---- checks ----
+    const idSet = new Set(ids)
+    const newerOpenOrders = openSnap.docs.filter(
+      (doc) => OPEN_STATUSES.includes(doc.data().status) && !idSet.has(doc.id)
+    )
+    if (newerOpenOrders.length > 0) {
+      throw new HttpError(
+        409,
+        'New order(s) came in for this table after the bill was opened. Refresh and settle again.',
+        { code: 'ORDERS_CHANGED', extraOrderIds: newerOpenOrders.map((doc) => doc.id) }
+      )
+    }
+
+    const subtotalPaise = orders.reduce((sum, order) => sum + orderSubtotalPaise(order), 0)
+    const discountPaise = toPaise(input.discountAmount)
+    assertDiscountAllowed({ subtotalPaise, discountPaise, isAdmin })
+
+    const computed = computeSettlement({
+      subtotalPaise,
+      discountPaise,
+      serviceChargePaise: toPaise(restaurant.defaultServiceCharge),
+      gstPercent: Number(restaurant.defaultGstPercent) || 0,
+    })
+    assertExpectedTotal(input.expectedPayableAmount, computed.payablePaise)
+
+    // ---- writes ----
+    const lastSeq = counterSnap.exists ? Number(counterSnap.data().lastSeq) || 0 : 0
+    const seq = lastSeq + 1
+    const year = Number(new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', year: 'numeric' }).format(new Date(now)))
+    const invoiceNumber = formatInvoiceNumber(year, seq)
+
+    const settlementRecord = toSettlementRecord(computed, {
+      paymentMode: input.paymentMode || 'cash',
+      paymentReference: String(input.paymentReference || '').trim(),
+      notes: String(input.notes || '').trim(),
+      invoiceNumber,
+    })
+
+    const allocations = new Map(
+      allocatePayable(
+        orders.map((order) => ({ id: order.id, subtotalPaise: orderSubtotalPaise(order) })),
+        computed.payablePaise
+      ).map((allocation) => [allocation.id, allocation.settledPaise])
+    )
+
+    tx.set(counterRef, { lastSeq: seq, updatedAt: now }, { merge: true })
+
+    for (const order of orders) {
+      const settledAmount = toRupees(allocations.get(order.id))
+      tx.update(orderCol(restaurantId).doc(order.id), {
+        status: 'closed',
+        closedAt: now,
+        updatedAt: now,
+        closedBy: actorLabel(actor),
+        invoiceNumber,
         settledAmount,
+        settlement: {
+          ...settlementRecord,
+          orderSubtotal: toRupees(orderSubtotalPaise(order)),
+          settledAmount,
+        },
+      })
+    }
+
+    // Touching the table doc here makes a concurrent upsertOrder for this
+    // table conflict with this settlement, so one of them retries.
+    if (tableSnap.exists) tx.update(tableRef, { updatedAt: now })
+
+    writeAuditInTransaction(tx, restaurantId, {
+      actor,
+      action: 'bill.settle',
+      after: {
+        invoiceNumber,
+        tableId,
+        orderIds: ids,
+        subtotal: settlementRecord.subtotal,
+        discountAmount: settlementRecord.discountAmount,
+        gstAmount: settlementRecord.gstAmount,
+        payableAmount: settlementRecord.payableAmount,
+        paymentMode: settlementRecord.paymentMode,
+        paymentReference: settlementRecord.paymentReference,
+      },
+      meta: {
+        isAdmin,
+        discountPercent: subtotalPaise > 0 ? Math.round((discountPaise * 10000) / subtotalPaise) / 100 : 0,
       },
     })
+
+    return {
+      restaurantId,
+      tableId,
+      tableNumber: String(orders[0].tableNumber ?? ''),
+      tableIds: [tableId],
+      orderIds: ids,
+      totalAmount: toRupees(subtotalPaise),
+      settledAmount: toRupees(computed.payablePaise),
+      settlement: settlementRecord,
+      invoiceNumber,
+      closedAt: now,
+    }
   })
+}
 
-  await batch.commit()
+// ───────────────────────── Daily numbers (Bugs #14, #15, #17, #46, #78) ─────────────────────────
+// One definition for the whole app: a day's revenue is the settled amount of
+// bills CLOSED on that restaurant-local day (closedAt). The dashboard and the
+// report both use it. The report also looks at orders PLACED that day for the
+// item and hourly breakdowns.
+//
+// Both reads are Firestore range queries on one timestamp field, so the cost
+// follows the day's volume, not the restaurant's whole history.
 
+async function restaurantClock(restaurantId) {
+  const doc = await restaurantRef(restaurantId).get()
+  const data = doc.exists ? doc.data() : {}
+  const timeZone = resolveTimezone(data.timezone)
   return {
-    restaurantId,
-    tableNumber,
-    orderIds: ordersToClose.map(o => o.id),
-    totalAmount,
-    settledAmount: settlement.payableAmount,
-    settlement,
-    closedAt: now,
+    timeZone,
+    dayKey: dayKeyFor(new Date(), timeZone),
+    resetAt: data.statsResetAt || null,
   }
 }
+
+async function closedBillsBetween(restaurantId, from, to) {
+  const snap = await orderCol(restaurantId)
+    .where('closedAt', '>=', from)
+    .where('closedAt', '<', to)
+    .get()
+  return snap.docs.map(fromDoc).filter((o) => o.status === 'closed')
+}
+
+async function ordersPlacedBetween(restaurantId, from, to) {
+  const snap = await orderCol(restaurantId)
+    .where('createdAt', '>=', from)
+    .where('createdAt', '<', to)
+    .get()
+  // Bug #42/#45: cancelled orders never count toward anything shown to staff.
+  return snap.docs.map(fromDoc).filter((o) => o.status !== 'cancelled')
+}
+
+const laterIso = (a, b) => {
+  if (!a) return b
+  if (!b) return a
+  return a > b ? a : b
+}
+
+const billPaise = (order) => toPaise(order.settledAmount ?? order.totalAmount ?? 0)
 
 const getDailyStats = async (restaurantId) => {
-  // Check if manual reset exists for today
-  const restRef = db.collection('restaurants').doc(restaurantId)
-  const restDoc = await restRef.get()
-  const resetAt = restDoc.exists ? restDoc.data()?.statsResetAt : null
-
-  const snap = await orderCol(restaurantId).where('status', '==', 'closed').get()
-  const allClosed = snap.docs.map(d => d.data())
-
-  const todayClosed = allClosed.filter(o => {
-    if (!isToday(o.closedAt)) return false
-    if (resetAt && new Date(o.closedAt) < new Date(resetAt)) return false
-    return true
-  })
-
-  const todayCompleted = allClosed.filter(o => {
-    if (!isToday(o.completedAt)) return false
-    if (resetAt && new Date(o.completedAt) < new Date(resetAt)) return false
-    return true
-  })
+  const clock = await restaurantClock(restaurantId)
+  const { start, end } = dayBounds(clock.dayKey, clock.timeZone)
+  // Bug #46: "reset" restarts only this live counter. Reports and bills keep the full day.
+  const from = laterIso(start, clock.resetAt)
+  const bills = await closedBillsBetween(restaurantId, from, end)
+  const paise = bills.reduce((sum, order) => sum + billPaise(order), 0)
 
   return {
-    dailyRevenue: todayClosed.reduce((sum, o) => sum + (o.settledAmount ?? o.totalAmount), 0),
-    completedOrdersToday: todayCompleted.length,
+    date: clock.dayKey,
+    dailyRevenue: toRupees(paise),
+    completedOrdersToday: bills.length,
+    statsResetAt: clock.resetAt,
   }
 }
 
-const resetDailyStats = async (restaurantId) => {
-  const restRef = db.collection('restaurants').doc(restaurantId)
+const resetDailyStats = async (restaurantId, actor = null) => {
+  const rRef = restaurantRef(restaurantId)
   const now = new Date().toISOString()
-  await restRef.update({ statsResetAt: now })
+  const before = (await rRef.get()).data()?.statsResetAt || null
+  await rRef.update({ statsResetAt: now })
+  await writeAudit(restaurantId, {
+    actor,
+    action: 'stats.reset',
+    before: { statsResetAt: before },
+    after: { statsResetAt: now },
+  })
   return { resetAt: now }
 }
 
@@ -327,77 +471,117 @@ const getOrderHistory = async (restaurantId, limit = 50) => {
     .orderBy('closedAt', 'desc')
     .limit(limit)
     .get()
-  return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+  return snap.docs.map(fromDoc)
 }
 
+/** Full-day report for the restaurant's local day. Reset does not apply here (Bug #46). */
 const getDailyReport = async (restaurantId) => {
-  const snap = await orderCol(restaurantId).get()
-  const allOrders = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
-  const todayOrders = allOrders.filter((o) => isToday(o.createdAt))
-  const todayClosed = todayOrders.filter((o) => o.status === 'closed')
+  const clock = await restaurantClock(restaurantId)
+  const { start, end } = dayBounds(clock.dayKey, clock.timeZone)
+  const [bills, placed] = await Promise.all([
+    closedBillsBetween(restaurantId, start, end),
+    ordersPlacedBetween(restaurantId, start, end),
+  ])
 
-  const totalRevenue = todayClosed.reduce(
-    (sum, o) => sum + (o.settledAmount ?? o.totalAmount ?? 0), 0
+  const modes = {}
+  bills.forEach((order) => {
+    const mode = order.settlement?.paymentMode || 'cash'
+    const entry = modes[mode] || { count: 0, paise: 0 }
+    entry.count += 1
+    entry.paise += billPaise(order)
+    modes[mode] = entry
+  })
+  const paymentModeBreakdown = Object.fromEntries(
+    Object.entries(modes).map(([mode, v]) => [mode, { count: v.count, total: toRupees(v.paise) }])
   )
 
-  const paymentModes = {}
-  todayClosed.forEach((o) => {
-    const mode = o.settlement?.paymentMode || 'cash'
-    if (!paymentModes[mode]) paymentModes[mode] = { count: 0, total: 0 }
-    paymentModes[mode].count += 1
-    paymentModes[mode].total += o.settledAmount ?? o.totalAmount ?? 0
-  })
-
   const itemCounts = {}
-  todayOrders.forEach((o) => {
-    ;(o.items || []).forEach((item) => {
+  placed.forEach((order) => {
+    ;(order.items || []).forEach((item) => {
       const key = item.name || item.id
-      if (!itemCounts[key]) itemCounts[key] = { name: key, quantity: 0, revenue: 0 }
-      itemCounts[key].quantity += item.quantity || 1
-      itemCounts[key].revenue += (item.price || 0) * (item.quantity || 1)
+      const entry = itemCounts[key] || { name: key, quantity: 0, paise: 0 }
+      const qty = item.quantity || 1
+      entry.quantity += qty
+      entry.paise += toPaise(item.price || 0) * qty
+      itemCounts[key] = entry
     })
   })
   const topItems = Object.values(itemCounts)
     .sort((a, b) => b.quantity - a.quantity)
     .slice(0, 5)
+    .map(({ name, quantity, paise }) => ({ name, quantity, revenue: toRupees(paise) }))
 
-  const hourlyBreakdown = Array.from({ length: 24 }, (_, i) => ({ hour: i, orders: 0 }))
-  todayOrders.forEach((o) => {
-    const h = new Date(o.createdAt).getHours()
-    if (h >= 0 && h < 24) hourlyBreakdown[h].orders += 1
+  const hourlyBreakdown = Array.from({ length: 24 }, (_, hour) => ({ hour, orders: 0 }))
+  placed.forEach((order) => {
+    const hour = hourFor(order.createdAt, clock.timeZone)
+    if (hour >= 0 && hour < 24) hourlyBreakdown[hour].orders += 1
   })
 
+  const totalPaise = bills.reduce((sum, order) => sum + billPaise(order), 0)
+
   return {
-    date: new Date().toISOString().split('T')[0],
-    totalOrders: todayClosed.length,
-    totalRevenue: roundMoney(totalRevenue),
-    averageOrderValue: todayClosed.length > 0 ? roundMoney(totalRevenue / todayClosed.length) : 0,
-    paymentModeBreakdown: paymentModes,
+    date: clock.dayKey,
+    timeZone: clock.timeZone,
+    totalOrders: bills.length,
+    totalRevenue: toRupees(totalPaise),
+    averageOrderValue: bills.length > 0 ? toRupees(Math.round(totalPaise / bills.length)) : 0,
+    paymentModeBreakdown,
     topItems,
     hourlyBreakdown,
   }
 }
 
-const cancelOrder = async (restaurantId, orderId, reason = '') => {
+/**
+ * Cancels ONE order (Bug #41). The table's other orders are not touched.
+ * An order that already has served items needs a reason.
+ */
+async function cancelOrder(restaurantId, orderId, { reason = '', actor = null } = {}) {
   const ref = orderCol(restaurantId).doc(orderId)
-  const doc = await ref.get()
-  if (!doc.exists) throw new Error('Order not found')
-  const order = doc.data()
-  if (order.status === 'closed' || order.status === 'cancelled') {
-    throw new Error(`Order is already ${order.status}`)
-  }
-  await ref.update({
-    status: 'cancelled',
-    cancelledAt: new Date().toISOString(),
-    cancelReason: reason || 'Cancelled by receptionist',
-    updatedAt: new Date().toISOString(),
+  const trimmedReason = String(reason || '').trim()
+
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref)
+    if (!snap.exists) throw new HttpError(404, 'Order not found', { code: 'ORDER_NOT_FOUND' })
+    const order = snap.data()
+
+    if (order.status === 'closed' || order.status === 'cancelled') {
+      throw new HttpError(409, `Order is already ${order.status}`, { code: 'ALREADY_FINAL' })
+    }
+
+    const hasServed = (order.items || []).some((item) => item.status === 'served')
+    if (hasServed && trimmedReason.length < 3) {
+      throw new HttpError(
+        400,
+        'This order already has served items. Give a reason (at least 3 characters) to cancel it.',
+        { code: 'REASON_REQUIRED' }
+      )
+    }
+
+    const now = new Date().toISOString()
+    const cancelReason = trimmedReason || 'Cancelled by receptionist'
+    const updates = {
+      status: 'cancelled',
+      cancelledAt: now,
+      cancelReason,
+      cancelledBy: actorLabel(actor),
+      updatedAt: now,
+    }
+    tx.update(ref, updates)
+
+    writeAuditInTransaction(tx, restaurantId, {
+      actor,
+      action: 'order.cancel',
+      before: { status: order.status, totalAmount: order.totalAmount, hasServedItems: hasServed },
+      after: { status: 'cancelled', reason: cancelReason },
+      meta: { orderId, tableId: order.tableId ?? null },
+    })
+
+    return { id: orderId, ...order, ...updates }
   })
-  return { id: orderId, ...order, status: 'cancelled' }
 }
 
 module.exports = {
   upsertOrder,
-  createOrder,
   updateOrder,
   updateOrderItemStatus,
   getRestaurantOrders,

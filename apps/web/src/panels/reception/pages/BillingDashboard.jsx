@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react'
 import TableCard from '../components/TableCard'
+import PrintBill from '../components/PrintBill'
 import DailyReport from "../components/dailyreport";
 import { useBilling } from '../hooks/useBilling'
+import { sumRupees } from '../billingMath'
 import { AnimatePresence, motion } from 'framer-motion'
 
 const formatDateTime = (value) => {
@@ -111,8 +113,11 @@ function BillingDashboard({ restaurantId, onLogout, userEmail }) {
     waiterAlerts, dismissWaiterAlert, restaurant,
     cancelOrder,
     resetStats,
+    actionError,
+    clearActionError,
   } = useBilling(restaurantId)
 
+  const [reprint,       setReprint]      = useState(null)
   const [searchTerm,    setSearchTerm]   = useState('')
   const [statusFilter,  setStatusFilter] = useState('all')
   const [activeView,    setActiveView]   = useState('live')
@@ -150,6 +155,25 @@ function BillingDashboard({ restaurantId, onLogout, userEmail }) {
     { key: 'served',    label: 'Served'    },
   ]
 
+  // Reprint uses the invoice number stored at settlement (Bug #43). A settled
+  // invoice can cover several orders from the same table, so all of them are
+  // gathered back together by invoice number.
+  const openReprint = (order) => {
+    const invoiceNumber = order.settlement?.invoiceNumber || null
+    const group = invoiceNumber
+      ? history.filter((o) => o.settlement?.invoiceNumber === invoiceNumber)
+      : [order]
+    setReprint({
+      tableNumber: order.tableNumber,
+      items: group.flatMap((o) => o.items || []),
+      totalAmount: sumRupees(group.map((o) => o.totalAmount || 0)),
+      settlement: order.settlement,
+      invoiceNumber,
+      billedAt: order.closedAt,
+      restaurantName: restaurant?.name || 'Restaurant',
+    })
+  }
+
   const handleReset = async () => {
     setResetting(true)
     await resetStats()
@@ -186,9 +210,9 @@ function BillingDashboard({ restaurantId, onLogout, userEmail }) {
               <button
                 onClick={() => setShowResetConfirm(true)}
                 className="filter-button"
-                title="Reset today's revenue counter"
+                title="Restart the live dashboard counter. Bills and reports are not changed."
               >
-                🔄 Reset Revenue
+                🔄 Restart live counter
               </button>
 
               <div className={`inline-flex w-fit items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold ${
@@ -232,6 +256,15 @@ function BillingDashboard({ restaurantId, onLogout, userEmail }) {
       <main className="mx-auto w-full max-w-7xl px-4 py-5 sm:px-6 lg:px-8">
 
         <WaiterAlertBanner alerts={waiterAlerts} onDismiss={dismissWaiterAlert} />
+
+        {actionError && (
+          <div role="alert" className="mb-5 flex items-start justify-between gap-4 rounded-2xl border border-rose-300 bg-rose-50 p-4 text-sm text-rose-700">
+            <span>{actionError}</span>
+            <button type="button" onClick={clearActionError} className="shrink-0 font-semibold underline">
+              Dismiss
+            </button>
+          </div>
+        )}
 
         <section className="mb-5 flex flex-col gap-3 rounded-2xl border border-[rgba(184,135,70,0.18)] bg-[var(--card)] p-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
           <div className="flex gap-2">
@@ -312,6 +345,15 @@ function BillingDashboard({ restaurantId, onLogout, userEmail }) {
                       <span>+{order.items.length - 4} more</span>
                     )}
                   </div>
+                  <div className="mt-3">
+                    <button
+                      type="button"
+                      onClick={() => openReprint(order)}
+                      className="action-button secondary text-sm"
+                    >
+                      🖨️ Reprint{order.settlement?.invoiceNumber ? ` · ${order.settlement.invoiceNumber}` : ''}
+                    </button>
+                  </div>
                 </article>
               ))}
             </section>
@@ -354,6 +396,13 @@ function BillingDashboard({ restaurantId, onLogout, userEmail }) {
         )}
       </main>
 
+      {reprint && (
+        <PrintBill
+          {...reprint}
+          onClose={() => setReprint(null)}
+        />
+      )}
+
       {showReport && (
         <DailyReport
           restaurantId={restaurantId}
@@ -379,10 +428,10 @@ function BillingDashboard({ restaurantId, onLogout, userEmail }) {
           }}>
             <div style={{ fontSize: '40px', marginBottom: '12px' }}>🔄</div>
             <h2 style={{ margin: '0 0 8px', fontSize: '18px', fontWeight: '700', color: 'var(--text)' }}>
-              Reset Today's Revenue?
+              Restart the live counter?
             </h2>
             <p style={{ margin: '0 0 24px', fontSize: '14px', color: 'var(--text2)', lineHeight: '1.5' }}>
-              This will reset the revenue counter to ₹0. Past orders won't be deleted — only the today's count will restart.
+              This restarts the live counter on the dashboard only. Bills, orders and the daily report are not changed, and the report still shows the whole day.
             </p>
             <div style={{ display: 'flex', gap: '10px' }}>
               <button

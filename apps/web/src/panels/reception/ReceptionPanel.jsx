@@ -1,6 +1,7 @@
 import './reception.css'
 import { useAuth } from '@/context/AuthContext'
 import Notice from '@/components/Notice'
+import AudioUnlockBanner from '@/components/AudioUnlockBanner'
 import BillingDashboard from './pages/BillingDashboard'
 
 /** Billing desk. Access is already enforced by <RequireRole panel="reception"> in App.jsx. */
@@ -19,6 +20,7 @@ export default function ReceptionPanel() {
 
   return (
     <div className="theme-reception">
+      <AudioUnlockBanner />
       <BillingDashboard restaurantId={restaurantId} onLogout={logout} userEmail={user.email} />
     </div>
   )

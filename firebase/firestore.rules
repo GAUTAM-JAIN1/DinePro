@@ -1,55 +1,84 @@
 rules_version = '2';
+// Bug #5 / #83 note on scope: the backend (Node + firebase-admin) is the only
+// writer in production — it uses the Admin SDK, which always bypasses these
+// rules. Nothing in the frontend apps uses the Firestore client SDK (only
+// Firebase Auth), so these rules are defense-in-depth: they stop someone who
+// has obtained a valid staff ID token from using the Firestore REST/client
+// SDK directly to bypass the backend's business logic (price checks,
+// settlement math, subscription billing, etc). Unverified against a real
+// Firebase emulator — flagged "U" in the bug list, re-test before relying on
+// these alone.
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Restaurant document — public read, admin/superadmin write
+    // Restaurant document — public read, admin/superadmin write.
+    // Bug #5/#3: subscription fields (subscriptionStatus, trialEndsAt,
+    // currentPeriodStart/End, planAmount, lastPaidAt, suspendedAt) are
+    // server-owned — set only by subscriptionService via the Admin SDK.
+    // A restaurant admin may update their own settings fields but can never
+    // touch billing/subscription state this way, closing the same
+    // self-grant hole that bug #3 closed on the REST API.
+    // Creation is backend-only (Admin SDK bypasses rules); direct client
+    // creation is never legitimate, so it's denied outright.
     match /restaurants/{restaurantId} {
       allow read: if true;
-      allow write: if isRestaurantStaff(restaurantId, 'admin') || isSuperAdmin();
-      
+      allow create: if false;
+      allow update: if (isRestaurantStaff(restaurantId, 'admin') || isSuperAdmin())
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly([
+                           'name', 'address', 'phone', 'brandColor', 'logoUrl',
+                           'defaultGstPercent', 'defaultServiceCharge',
+                           'onboardingCompleted', 'onboardingCompletedAt',
+                           'updatedAt', 'statsResetAt'
+                         ]);
+      allow delete: if isSuperAdmin();
+
       // Menu — public read, admin write
       match /menu/{itemId} {
         allow read: if true;
         allow write: if isRestaurantStaff(restaurantId, 'admin');
       }
-      
-      // Orders — staff read/write, public create
+
+      // Orders — staff read, server-authoritative write.
+      // Bug #5/#10: the backend always creates/updates orders via the Admin
+      // SDK, so direct client create/update is never legitimate — pricing,
+      // totals and settlement must go through the server's validated paths
+      // (orderService), not a raw Firestore write a customer or staff client
+      // could otherwise forge.
       match /orders/{orderId} {
-        allow read: if isRestaurantStaff(restaurantId, 'admin') 
+        allow read: if isRestaurantStaff(restaurantId, 'admin')
                     || isRestaurantStaff(restaurantId, 'chef')
                     || isRestaurantStaff(restaurantId, 'receptionist');
-        allow create: if true;
-        allow update: if isRestaurantStaff(restaurantId, 'admin')
-                     || isRestaurantStaff(restaurantId, 'chef')
-                     || isRestaurantStaff(restaurantId, 'receptionist');
+        allow create: if false;
+        allow update: if false;
       }
-      
+
       // Tables — public read, admin write
       match /tables/{tableId} {
         allow read: if true;
         allow write: if isRestaurantStaff(restaurantId, 'admin');
       }
-      
+
       // Staff — admin only
       match /staff/{staffId} {
         allow read: if isRestaurantStaff(restaurantId, 'admin');
         allow write: if isRestaurantStaff(restaurantId, 'admin');
       }
     }
-    
+
     // Super admin config
     match /superAdmin/{doc} {
       allow read, write: if isSuperAdmin();
     }
-    
+
     function isRestaurantStaff(restaurantId, role) {
-      return request.auth != null 
+      return request.auth != null
              && request.auth.token.restaurantId == restaurantId
              && request.auth.token.role == role;
     }
-    
+
     function isSuperAdmin() {
-      return request.auth != null 
-             && (request.auth.token.platformAdmin == true 
+      return request.auth != null
+             && (request.auth.token.platformAdmin == true
                  || request.auth.token.superAdmin == true
                  || request.auth.token.role == 'superadmin');
     }

@@ -9,6 +9,29 @@ import { unlockAudio } from '@/lib/kitchenAlertSound'
 import PageLoader from '@/components/PageLoader'
 import Notice from '@/components/Notice'
 
+// Bug #72: setup hints (which env file to check, which Firebase console page to
+// open) are for developers. In production a visitor only sees a plain message.
+const SETUP_CODES = [
+  'auth/invalid-api-key',
+  'auth/api-key-not-valid.-please-pass-a-valid-api-key.',
+  'auth/operation-not-allowed',
+  'auth/configuration-not-found',
+  'auth/unauthorized-domain',
+]
+
+function setupHint(code) {
+  switch (code) {
+    case 'auth/operation-not-allowed':
+      return 'Firebase Console me Email/Password sign-in enable nahi hai (Authentication → Sign-in method).'
+    case 'auth/configuration-not-found':
+      return 'Firebase Authentication set up nahi hai is project me (Console → Authentication → Get started).'
+    case 'auth/unauthorized-domain':
+      return 'Ye domain Firebase me authorized nahi hai (Authentication → Settings → Authorized domains).'
+    default:
+      return 'Firebase API key galat ya missing hai. apps/web/.env check karo aur npm run dev dobara chalao.'
+  }
+}
+
 function errorMessage(code) {
   switch (code) {
     case 'auth/user-not-found':
@@ -21,18 +44,19 @@ function errorMessage(code) {
       return 'This account has been disabled.'
     case 'auth/network-request-failed':
       return 'Network error. Check your connection and try again.'
-    case 'auth/invalid-api-key':
-    case 'auth/api-key-not-valid.-please-pass-a-valid-api-key.':
-      return 'Firebase API key galat ya missing hai. apps/web/.env check karo aur npm run dev dobara chalao.'
-    case 'auth/operation-not-allowed':
-      return 'Firebase Console me Email/Password sign-in enable nahi hai (Authentication → Sign-in method).'
-    case 'auth/configuration-not-found':
-      return 'Firebase Authentication set up nahi hai is project me (Console → Authentication → Get started).'
-    case 'auth/unauthorized-domain':
-      return 'Ye domain Firebase me authorized nahi hai (Authentication → Settings → Authorized domains).'
     default:
-      return `Login failed (${code || 'unknown'}). Browser console (F12) me details dekho.`
+      break
   }
+
+  if (SETUP_CODES.includes(code)) {
+    return import.meta.env.DEV
+      ? setupHint(code)
+      : 'Sign-in is unavailable right now. Please try again later.'
+  }
+
+  return import.meta.env.DEV
+    ? `Login failed (${code || 'unknown'}). Browser console (F12) me details dekho.`
+    : 'Sign-in failed. Please try again.'
 }
 
 export default function Login() {

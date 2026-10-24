@@ -1,11 +1,17 @@
-function PrintBill({ tableNumber, items, totalAmount, settlement, restaurantName, onClose }) {
+import { lineTotal } from '../billingMath'
+
+// Bug #43: the invoice number comes from the server when the bill is settled.
+// Before settlement this is only a preview and carries no invoice number, so
+// a preview can never be mistaken for a numbered invoice.
+function PrintBill({
+  tableNumber, items, totalAmount, settlement, restaurantName, onClose,
+  invoiceNumber = null, billedAt = null,
+}) {
   const handlePrint = () => window.print()
   const payableAmount = settlement?.payableAmount ?? totalAmount
-
-  // Task 3.3 — Auto-generate bill number: BILL-YYYYMMDD-HHMMSS
-  const now = new Date()
-  const pad = (n) => String(n).padStart(2, '0')
-  const billNumber = `BILL-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+  const now = billedAt ? new Date(billedAt) : new Date()
+  const invoiceLabel = invoiceNumber || settlement?.invoiceNumber || null
+  const headingText = invoiceLabel ? `Invoice ${invoiceLabel}` : 'PREVIEW — NOT A FINAL BILL'
 
   return (
     <>
@@ -23,7 +29,7 @@ function PrintBill({ tableNumber, items, totalAmount, settlement, restaurantName
             <p className="mt-1 text-xs text-[var(--text3)]">
               {now.toLocaleString('en-IN')}
             </p>
-            <p className="mt-1 text-xs font-mono text-[var(--text3)]">{billNumber}</p>
+            <p className="mt-1 text-xs font-mono text-[var(--text3)]">{headingText}</p>
           </div>
 
           <div className="mb-4 max-h-64 space-y-2 overflow-y-auto pr-1">
@@ -33,7 +39,7 @@ function PrintBill({ tableNumber, items, totalAmount, settlement, restaurantName
                   {item.name} x {item.quantity}
                 </span>
                 <span className="font-semibold text-[var(--text)]">
-                  Rs. {item.price * item.quantity}
+                  Rs. {lineTotal(item)}
                 </span>
               </div>
             ))}
@@ -97,7 +103,7 @@ function PrintBill({ tableNumber, items, totalAmount, settlement, restaurantName
           <h1>{restaurantName}</h1>
           <p>Table {tableNumber}</p>
           <p>{now.toLocaleString('en-IN')}</p>
-          <p className="bill-number">{billNumber}</p>
+          <p className="bill-number">{headingText}</p>
           <div className="receipt-divider">--------------------------------</div>
         </div>
 
@@ -105,7 +111,7 @@ function PrintBill({ tableNumber, items, totalAmount, settlement, restaurantName
           {items.map((item, index) => (
             <div key={index} className="receipt-item">
               <span>{item.name} x{item.quantity}</span>
-              <span>Rs.{item.price * item.quantity}</span>
+              <span>Rs.{lineTotal(item)}</span>
             </div>
           ))}
         </div>

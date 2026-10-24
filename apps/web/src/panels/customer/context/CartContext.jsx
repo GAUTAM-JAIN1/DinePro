@@ -1,4 +1,5 @@
 import { createContext, useContext, useState } from 'react'
+import { lineTotal, sumRupees } from '../../../lib/money'
 
 const CartContext = createContext()
 
@@ -47,9 +48,8 @@ export function CartProvider({ children }) {
   const clearCart = () => setCartItems([])
 
   // Total amount
-  const totalAmount = cartItems.reduce(
-    (sum, item) => sum + item.price * item.quantity, 0
-  )
+  // Bug #28: summed in paise, so the cart total never shows float noise.
+  const totalAmount = sumRupees(cartItems.map(lineTotal))
 
   // Total items count
   const totalItems = cartItems.reduce(

@@ -1,3 +1,5 @@
+import { lineTotal } from '../billingMath'
+
 function BillSummary({ items, totalAmount, settlement, orders, onMarkItemServed }) {
   const payableAmount = settlement?.payableAmount ?? totalAmount
   const findOrderForItem = (item) =>
@@ -38,7 +40,7 @@ function BillSummary({ items, totalAmount, settlement, orders, onMarkItemServed 
               )}
             </span>
             <span className="shrink-0 font-semibold text-[var(--text)]">
-              Rs. {item.price * item.quantity}
+              Rs. {lineTotal(item)}
             </span>
           </div>
         )})}

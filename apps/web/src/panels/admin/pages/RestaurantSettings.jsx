@@ -8,17 +8,32 @@ export default function RestaurantSettings({ restaurant, setRestaurant }) {
     address: restaurant?.address || '',
     phone: restaurant?.phone || '',
     brandColor: restaurant?.brandColor || restaurant?.themeColor || '#f39c12',
-    defaultGstPercent: restaurant?.defaultGstPercent ?? 0,
-    defaultServiceCharge: restaurant?.defaultServiceCharge ?? 0,
+    defaultGstPercent: String(restaurant?.defaultGstPercent ?? 0),
+    defaultServiceCharge: String(restaurant?.defaultServiceCharge ?? 0),
     logoUrl: restaurant?.logoUrl || '',
   })
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
 
   const handleSave = async () => {
+    // Bug #76: a blank box used to save as 0 without a word. Ask for a number instead.
+    const gst = Number(form.defaultGstPercent)
+    const service = Number(form.defaultServiceCharge)
+    if (form.defaultGstPercent === '' || !Number.isFinite(gst) || gst < 0 || gst > 100) {
+      toast.error('GST 0 se 100 ke beech daalo (0 = no GST)')
+      return
+    }
+    if (form.defaultServiceCharge === '' || !Number.isFinite(service) || service < 0) {
+      toast.error('Service charge daalo (0 = no service charge)')
+      return
+    }
     setSaving(true)
     try {
-      const { data } = await api.put(`/api/restaurants/${restaurant.id}`, form)
+      const { data } = await api.put(`/api/restaurants/${restaurant.id}`, {
+        ...form,
+        defaultGstPercent: gst,
+        defaultServiceCharge: service,
+      })
       if (data.success || data.restaurant) {
         setRestaurant(prev => ({ ...prev, ...form }))
         toast.success('Settings saved!')
@@ -97,7 +112,7 @@ export default function RestaurantSettings({ restaurant, setRestaurant }) {
         <div>
           <label className="text-sm font-medium text-gray-700 block mb-1">Default GST (%)</label>
           <input type="number" min="0" max="28" value={form.defaultGstPercent}
-            onChange={e => setForm({...form, defaultGstPercent: Number(e.target.value)})} className={inputStyle} />
+            onChange={e => setForm({...form, defaultGstPercent: e.target.value})} className={inputStyle} />
           <p className="text-xs text-gray-400 mt-1">Pre-filled in settlement form. 0 = no GST.</p>
         </div>
 
@@ -105,7 +120,7 @@ export default function RestaurantSettings({ restaurant, setRestaurant }) {
         <div>
           <label className="text-sm font-medium text-gray-700 block mb-1">Default Service Charge (₹)</label>
           <input type="number" min="0" value={form.defaultServiceCharge}
-            onChange={e => setForm({...form, defaultServiceCharge: Number(e.target.value)})} className={inputStyle} />
+            onChange={e => setForm({...form, defaultServiceCharge: e.target.value})} className={inputStyle} />
           <p className="text-xs text-gray-400 mt-1">Pre-filled in settlement form. 0 = no service charge.</p>
         </div>
 

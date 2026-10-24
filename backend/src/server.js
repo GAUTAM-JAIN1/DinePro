@@ -3,6 +3,7 @@ const express = require('express')
 const http = require('http')
 const { Server } = require('socket.io')
 const cors = require('cors')
+const helmet = require('helmet')
 
 // Import Routes
 const menuRoutes = require('./routes/menu')
@@ -18,6 +19,7 @@ const { initOrderSocket } = require('./socket/orderSocket')
 
 // Import Middleware
 const { generalRateLimit } = require('./middleware/rateLimit')
+const { sendError } = require('./utils/httpErrors')
 
 const app = express()
 const server = http.createServer(app)
@@ -72,16 +74,40 @@ const io = new Server(server, {
 })
 app.set('io', io)
 
+// Bug #79: this is a pure JSON API (no HTML/static assets served here —
+// images live on Cloudinary), so a locked-down default CSP is safe and
+// costs nothing. helmet() also covers X-Content-Type-Options, X-Frame-Options,
+// Referrer-Policy and removing X-Powered-By; HSTS is added explicitly since
+// Render terminates TLS in front of us.
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'none'"],
+        frameAncestors: ["'none'"],
+      },
+    },
+    hsts: {
+      maxAge: 180 * 24 * 60 * 60, // 180 days
+      includeSubDomains: true,
+      preload: false,
+    },
+  })
+)
+
 app.use(cors(corsOptions))
 
 // Middleware
 app.use(express.json({ limit: '1mb' }))
 
 // Health check — very cheap, no database access. Point UptimeRobot at /health.
+// Bug #82: during a deploy/restart this returns 503 so traffic moves to the new instance.
+let draining = false
 app.get('/health', (req, res) => {
+  if (draining) return res.status(503).json({ status: 'draining' })
   res.status(200).json({ status: 'ok', uptime: Math.round(process.uptime()) })
 })
-app.head('/health', (req, res) => res.sendStatus(200))
+app.head('/health', (req, res) => res.sendStatus(draining ? 503 : 200))
 
 app.get('/', (req, res) => {
   res.json({ message: 'Restaurant SaaS Backend is Running! 🍽️' })
@@ -103,8 +129,8 @@ initOrderSocket(io)
 
 // Global error handler
 app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err)
-  res.status(500).json({ success: false, error: 'Internal server error' })
+  // Bug #24: 4xx (including malformed JSON bodies) keep their message; 5xx are logged and generic.
+  sendError(res, err, { label: 'unhandled' })
 })
 
 // A stray rejected promise must never take the whole server down
@@ -121,7 +147,10 @@ server.listen(PORT, '0.0.0.0', () => {
 
 // Render sends SIGTERM on every deploy/restart — finish in-flight work first
 function shutdown(signal) {
+  if (draining) return
+  draining = true
   console.log(`${signal} received, shutting down…`)
+  server.closeIdleConnections?.()
   io.close(() => {
     server.close(() => process.exit(0))
   })

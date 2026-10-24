@@ -1,53 +1,86 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import api from '@/lib/api'
 import { ContentSkeleton, RowsSkeleton } from '@/components/Skeleton'
 
+// Each section loads on its own, so one failure doesn't hide the others.
+// Bug #47: a failed request used to look like zero sales. Failed numbers now show "—" and a retry.
+const SECTIONS = {
+  stats: (id) => api.get(`/api/orders/${id}/stats`),
+  report: (id) => api.get(`/api/orders/${id}/daily-report`),
+  openOrders: (id) => api.get(`/api/orders/${id}`),
+  subscription: (id) => api.get(`/api/restaurants/${id}/subscription`),
+  tables: (id) => api.get(`/api/tables/${id}`),
+}
+
 export default function Dashboard({ restaurant }) {
-  const [stats, setStats] = useState(null)
-  const [report, setReport] = useState(null)
-  const [orders, setOrders] = useState([])
+  const [data, setData] = useState({ stats: null, report: null, openOrders: [], subscription: null, tableCount: null })
+  const [errors, setErrors] = useState({})
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (!restaurant?.id) return
-    let cancelled = false
     setLoading(true)
+    const keys = Object.keys(SECTIONS)
+    const results = await Promise.allSettled(keys.map((key) => SECTIONS[key](restaurant.id)))
 
-    Promise.all([
-      api.get(`/api/orders/${restaurant.id}/stats`).catch(() => ({ data: {} })),
-      api.get(`/api/orders/${restaurant.id}/daily-report`).catch(() => ({ data: {} })),
-      api.get(`/api/orders/${restaurant.id}`).catch(() => ({ data: { orders: [] } })),
-    ]).then(([statsRes, reportRes, ordersRes]) => {
-      if (cancelled) return
-      setStats(statsRes.data.stats || {})
-      setReport(reportRes.data.report || {})
-      setOrders((ordersRes.data.orders || []).slice(0, 10))
-    }).finally(() => { if (!cancelled) setLoading(false) })
+    const next = { stats: null, report: null, openOrders: [], subscription: null, tableCount: null }
+    const failed = {}
+    results.forEach((result, index) => {
+      const key = keys[index]
+      if (result.status === 'rejected') {
+        failed[key] = result.reason?.response?.data?.error || 'Could not load'
+        return
+      }
+      const body = result.value.data || {}
+      if (key === 'stats') next.stats = body.stats || {}
+      if (key === 'report') next.report = body.report || {}
+      if (key === 'openOrders') next.openOrders = body.orders || []
+      if (key === 'subscription') next.subscription = body.subscription || null
+      if (key === 'tables') next.tableCount = (body.tables || []).length
+    })
 
-    return () => { cancelled = true }
+    setData(next)
+    setErrors(failed)
+    setLoading(false)
   }, [restaurant?.id])
+
+  useEffect(() => { load() }, [load])
 
   if (loading) return <ContentSkeleton rows={4} />
 
-  const sub = restaurant?.subscription || {}
-  const subStatus = sub.status || 'unknown'
-  const daysLeft = sub.daysRemaining ?? '—'
+  const sub = data.subscription
+  const subStatus = sub?.effectiveStatus || (errors.subscription ? 'unavailable' : 'unknown')
+  const daysLeft = sub?.daysRemaining ?? '—'
   const subColor = subStatus === 'active' ? 'bg-green-100 text-green-700'
     : subStatus === 'trial' ? 'bg-yellow-100 text-yellow-700'
     : 'bg-red-100 text-red-700'
 
+  const stats = data.stats || {}
+  const report = data.report || {}
+  // Counts use every open order; the list below shows the latest ten.
+  const openOrders = data.openOrders
+  const orders = openOrders.slice(0, 10)
+  const activeTables = new Set(openOrders.map(o => o.tableId || o.tableNumber)).size
+  const shown = (key, value) => (errors[key] ? '—' : value)
+
   const statCards = [
-    { label: "Today's Revenue", value: `₹${(stats?.dailyRevenue || 0).toLocaleString('en-IN')}`, icon: '💰', color: 'bg-green-50 text-green-700' },
-    { label: 'Orders Today', value: stats?.completedOrdersToday || 0, icon: '📋', color: 'bg-blue-50 text-blue-700' },
-    { label: 'Active Tables', value: orders.length, icon: '🪑', color: 'bg-orange-50 text-orange-700' },
-    { label: 'Items in Queue', value: orders.reduce((s, o) => s + (o.items?.length || 0), 0), icon: '🍳', color: 'bg-purple-50 text-purple-700' },
+    { label: "Today's Revenue", value: shown('stats', `₹${(stats.dailyRevenue || 0).toLocaleString('en-IN')}`), icon: '💰', color: 'bg-green-50 text-green-700' },
+    { label: 'Orders Today', value: shown('stats', stats.completedOrdersToday || 0), icon: '📋', color: 'bg-blue-50 text-blue-700' },
+    { label: 'Active Tables', value: shown('openOrders', activeTables), icon: '🪑', color: 'bg-orange-50 text-orange-700' },
+    { label: 'Items in Queue', value: shown('openOrders', openOrders.reduce((s, o) => s + (o.items?.length || 0), 0)), icon: '🍳', color: 'bg-purple-50 text-purple-700' },
   ]
 
-  const hourly = report?.hourlyBreakdown || []
+  const hourly = report.hourlyBreakdown || []
   const maxOrders = Math.max(...hourly.map(h => h.orders), 1)
 
   return (
     <div className="p-8">
+      {Object.keys(errors).length > 0 && (
+        <div role="alert" className="mb-6 flex items-center justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-5 py-3 text-sm text-red-700">
+          <span>Some numbers could not be loaded ({Object.values(errors)[0]}). Dashes mean "not loaded", not zero.</span>
+          <button type="button" onClick={load} className="font-semibold underline">Retry</button>
+        </div>
+      )}
       {/* Subscription Banner */}
       <div className={`${subColor} rounded-xl px-5 py-3 mb-6 flex justify-between items-center`}>
         <div>

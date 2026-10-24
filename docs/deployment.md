@@ -77,8 +77,13 @@ VITE_FIREBASE_APP_ID=...
 
 - Authentication → Sign-in method: **Email/Password** enabled.
 - Authentication → Settings → **Authorized domains**: add your Vercel domain (needed if you ever add Google sign-in; harmless otherwise).
-- Deploy `firebase/firestore.rules` and `firebase/storage.rules`.
-- Create the first Super Admin with `node backend/setPlatformAdmin.js` (edit the UID inside first), then log out and back in.
+- Deploy `firebase/firestore.rules`, `firebase/firestore.indexes.json` and `firebase/storage.rules`:
+  `firebase deploy --only firestore,storage` (uses `firebase.json` at the repo root).
+  **Do this before pointing the app at a fresh Firestore project** — the composite indexes
+  (orders by status/createdAt/closedAt/tableId, menu by isAvailable+sortOrder) don't exist by
+  default, and the queries that need them fail outright on a brand new project until the
+  indexes finish building (can take a few minutes).
+- Create the first Super Admin with `node backend/setPlatformAdmin.js <uid> --confirm` (get the UID from Firebase Auth → Users after the owner signs up once), then log out and back in.
 
 ## 4. Local development
 

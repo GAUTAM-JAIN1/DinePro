@@ -1,8 +1,17 @@
-// Shared, reliable alert-sound utility for chef-panel and receptionist-panel.
-// Designed to survive browser autoplay restrictions and "silent fail" issues.
+// Shared alert-sound utility for the kitchen and reception panels.
+// Browsers keep audio locked until a user gesture. A session restored from a
+// saved login has no click, so the panel must say so and offer one (Bug #66).
 
 let _audioContext = null
 let _unlocked = false
+let _blocked = false
+const blockedListeners = new Set()
+
+function setBlocked(next) {
+  if (_blocked === next) return
+  _blocked = next
+  blockedListeners.forEach((fn) => fn(next))
+}
 
 function getContext() {
   if (typeof window === 'undefined') return null
@@ -10,18 +19,34 @@ function getContext() {
   if (!AudioContextClass) return null
   if (!_audioContext) {
     _audioContext = new AudioContextClass()
+    _audioContext.onstatechange = () => setBlocked(_audioContext.state !== 'running')
+    setBlocked(_audioContext.state !== 'running')
   }
   return _audioContext
 }
 
-// Browsers suspend AudioContext until a real user gesture happens (click/tap).
-// Call this from your login button's onClick (or any click handler) ONCE —
-// after that, sound will work reliably for the rest of the session.
+/** True while the browser won't play alert sounds yet. */
+export function isAudioBlocked() {
+  return _blocked
+}
+
+/** Calls fn(blocked) whenever that changes. Returns an unsubscribe function. */
+export function onAudioBlockedChange(fn) {
+  blockedListeners.add(fn)
+  return () => {
+    blockedListeners.delete(fn)
+  }
+}
+
+// Call from a click or tap handler. Resumes audio and clears the blocked state.
 export function unlockAudio() {
   const ctx = getContext()
   if (!ctx) return
+  const finish = () => setBlocked(ctx.state !== 'running')
   if (ctx.state === 'suspended') {
-    ctx.resume().catch(() => {})
+    ctx.resume().then(finish).catch(() => setBlocked(true))
+  } else {
+    finish()
   }
   if (!_unlocked) {
     // Play a near-silent buffer to fully unlock audio on some mobile browsers
@@ -51,8 +76,8 @@ function playSingleBeep(ctx, startTime, frequency = 880, duration = 0.18, volume
 }
 
 // Plays a strong, attention-grabbing 3-beep alert.
-// Automatically tries to resume a suspended context (in case unlockAudio
-// wasn't called, e.g. very first load), and retries once if blocked.
+// If the context is suspended, tries to resume it and retries once. When that
+// fails, the blocked state is set so the panel can show the "Sound on" banner.
 export function playAlert({ repeats = 3, gapMs = 380 } = {}) {
   const ctx = getContext()
   if (!ctx) return
@@ -65,13 +90,19 @@ export function playAlert({ repeats = 3, gapMs = 380 } = {}) {
   }
 
   if (ctx.state === 'suspended') {
-    ctx.resume().then(fire).catch(() => {
-      // Retry once after a short delay — some browsers need a beat
-      setTimeout(() => {
-        ctx.resume().then(fire).catch(() => {})
-      }, 200)
-    })
+    ctx.resume()
+      .then(() => { setBlocked(false); fire() })
+      .catch(() => {
+        setBlocked(true)
+        // Some browsers need a beat before resume is accepted
+        setTimeout(() => {
+          ctx.resume()
+            .then(() => { setBlocked(false); fire() })
+            .catch(() => setBlocked(true))
+        }, 200)
+      })
   } else {
+    setBlocked(false)
     fire()
   }
 }
