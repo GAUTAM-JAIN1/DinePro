@@ -1,8 +1,18 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useCart } from '../context/CartContext'
 import { useOrder } from '../hooks/useOrder'
 import { readVerifiedTable } from '../hooks/useTable'
+import { lineTotal } from '../../../lib/money'
+
+// One key per submission. A retry of the SAME cart reuses the key, so the
+// server returns the first order instead of creating a duplicate (Bug #51).
+// Change the cart and the key changes too, so an edited order is never
+// mistaken for the old one.
+const newSubmissionKey = () => {
+  const random = globalThis.crypto?.randomUUID?.()
+  return random || `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`
+}
 
 function CartPage() {
   const { restaurantId, tableId } = useParams()
@@ -18,35 +28,27 @@ function CartPage() {
   const navigate = useNavigate()
   const [orderNote, setOrderNote] = useState('')
   const [orderError, setOrderError] = useState('')
+  const attemptRef = useRef({ key: null, signature: null })
   const verifiedTable = readVerifiedTable(restaurantId, tableId)
+  // Display only. The server works out the table number from the table doc (Bug #53).
   const tableNumber = verifiedTable?.tableNumber || tableId
 
   const handlePlaceOrder = async () => {
     if (loading || cartItems.length === 0) return
 
-    const duplicateKey = `lastOrder:${restaurantId}:${tableId}`
-    const signature = JSON.stringify({
-      note: orderNote.trim(),
-      items: cartItems
-        .map(item => ({
-          id: item.id,
-          variant: item.variant || '',
-          price: Number(item.price),
-          quantity: Number(item.quantity),
-          note: (item.specialInstructions || '').trim(),
-        }))
-        .sort((a, b) => `${a.id}:${a.variant}`.localeCompare(`${b.id}:${b.variant}`)),
-    })
+    // What the server will price: menu id, variant, quantity, note. Never a price.
+    const payloadItems = cartItems.map(item => ({
+      id: item.id,
+      variant: item.variant || null,
+      quantity: Number(item.quantity),
+      specialInstructions: (item.specialInstructions || '').trim(),
+    }))
+    const specialInstructions = orderNote.trim()
+    const signature = JSON.stringify({ items: payloadItems, specialInstructions })
 
-    try {
-      const lastOrder = JSON.parse(sessionStorage.getItem(duplicateKey) || 'null')
-      if (lastOrder?.signature === signature && Date.now() - lastOrder.createdAt < 5000) {
-        setOrderError('Same order was just submitted. Please wait a few seconds before trying again.')
-        return
-      }
-      sessionStorage.setItem(duplicateKey, JSON.stringify({ signature, createdAt: Date.now() }))
-    } catch {
-      // Duplicate protection is best-effort on the client; backend also checks.
+    // Reuse the key only while the cart is unchanged (Bug #38: no client lock; a failed attempt can just be retried).
+    if (!attemptRef.current.key || attemptRef.current.signature !== signature) {
+      attemptRef.current = { key: newSubmissionKey(), signature }
     }
 
     setOrderError('')
@@ -54,15 +56,13 @@ function CartPage() {
     const result = await placeOrder({
       restaurantId,
       tableId,
-      tableNumber,
-      specialInstructions: orderNote.trim(),
-      items: cartItems.map(item => ({
-        ...item,
-        specialInstructions: (item.specialInstructions || '').trim(),
-      })),
+      specialInstructions,
+      items: payloadItems,
+      idempotencyKey: attemptRef.current.key,
     })
 
     if (result.success) {
+      attemptRef.current = { key: null, signature: null }
       clearCart()
       navigate(`/r/${restaurantId}/table/${tableId}/confirmed`)
     } else {
@@ -170,7 +170,7 @@ function CartPage() {
                   minWidth: '70px',
                   textAlign: 'right'
                 }}>
-                  Rs. {item.price * item.quantity}
+                  Rs. {lineTotal(item)}
                 </div>
               </div>
 
@@ -219,7 +219,7 @@ function CartPage() {
               marginBottom: '6px'
             }}>
               <span>{item.name}{item.variant ? ` (${item.variantHindi || item.variant})` : ''} x {item.quantity}</span>
-              <span>Rs. {item.price * item.quantity}</span>
+              <span>Rs. {lineTotal(item)}</span>
             </div>
           ))}
           <div style={{

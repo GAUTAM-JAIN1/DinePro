@@ -1,5 +1,15 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
+
+// Money with paise, in Indian grouping (Bug #48: toFixed(0) hid the paise).
+const formatMoney = (n) =>
+  Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+// The restaurant's own day, not the browser's (Bug #48).
+const formatDay = (dayKey) =>
+  new Date(`${dayKey}T12:00:00`).toLocaleDateString('en-IN', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+  })
 import { auth } from '@/lib/firebase'
 
 const BACKEND_URL = import.meta.env.VITE_API_URL
@@ -34,9 +44,7 @@ function DailyReport({ restaurantId, restaurantName, onClose }) {
 
   const handlePrint = () => window.print()
 
-  const today = new Date().toLocaleDateString('en-IN', {
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-  })
+  const today = report?.date ? formatDay(report.date) : ''
 
   return (
     <>
@@ -101,7 +109,7 @@ function DailyReport({ restaurantId, restaurantName, onClose }) {
                         >
                           <span className="font-semibold text-[var(--text)] capitalize">{mode}</span>
                           <div className="text-right">
-                            <span className="font-bold text-[var(--btn)]">Rs. {data.total.toFixed(0)}</span>
+                            <span className="font-bold text-[var(--btn)]">Rs. {formatMoney(data.total)}</span>
                             <span className="text-[var(--text3)] ml-2">({data.count} orders)</span>
                           </div>
                         </div>
@@ -189,7 +197,7 @@ function DailyReport({ restaurantId, restaurantName, onClose }) {
               {Object.entries(report.paymentModeBreakdown).map(([mode, data]) => (
                 <div key={mode} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '3px' }}>
                   <span>{mode.toUpperCase()}:</span>
-                  <span>Rs.{data.total.toFixed(0)} ({data.count}x)</span>
+                  <span>Rs.{formatMoney(data.total)} ({data.count}x)</span>
                 </div>
               ))}
             </div>

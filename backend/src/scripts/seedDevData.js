@@ -1,5 +1,11 @@
 require('dotenv').config()
 
+// Bug #81: this writes a fixed restaurant id (rest_001) with merge. Never run it against production by accident.
+if (process.env.NODE_ENV === 'production' && process.env.ALLOW_SEED !== 'yes') {
+  console.error('Refusing to seed: NODE_ENV is production. Set ALLOW_SEED=yes only for a throwaway project.')
+  process.exit(1)
+}
+
 const { db } = require('../services/firebaseAdmin')
 
 const RESTAURANT_ID = 'rest_001'
@@ -8,7 +14,7 @@ const restaurant = {
   name: 'Tadka Junction',
   address: '123 Main Street, Delhi',
   logoUrl: '',
-  themeColor: '#B88746',
+  brandColor: '#B88746',
   subscriptionStatus: 'active',
 }
 

@@ -7,22 +7,23 @@ export function useOrder() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
-  const placeOrder = async ({ restaurantId, tableId, tableNumber, items, specialInstructions }) => {
+  const placeOrder = async ({ restaurantId, tableId, items, specialInstructions, idempotencyKey }) => {
     try {
       setLoading(true)
       setError(null)
 
-      // The backend saves the order AND broadcasts it to the kitchen / billing
-      // screens over Socket.io — the customer no longer emits events itself.
+      // The backend prices the items from the menu, derives the table number,
+      // and uses idempotencyKey so a retry can't create a second order (Bug #1, #51, #53).
+      // It also broadcasts the order to the kitchen / billing screens.
       const res = await axios.post(`${BACKEND_URL}/api/orders`, {
         restaurantId,
         tableId,
-        tableNumber,
         items,
         specialInstructions,
+        idempotencyKey,
       })
 
-      return { success: true, order: res.data.order }
+      return { success: true, order: res.data.order, replayed: Boolean(res.data.replayed) }
     } catch (err) {
       const message = err.response?.data?.error || 'Failed to place order.'
       setError(message)

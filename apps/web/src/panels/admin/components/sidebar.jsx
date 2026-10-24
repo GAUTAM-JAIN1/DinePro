@@ -105,7 +105,7 @@ function Sidebar({ restaurant, isOpen, onClose, platformAdmin, managing, onBackT
               width: '40px', height: '40px', borderRadius: '12px',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               fontSize: '20px', marginBottom: '12px',
-              backgroundColor: restaurant.themeColor
+              backgroundColor: restaurant.brandColor || restaurant.themeColor
             }}
           >
             🍽️

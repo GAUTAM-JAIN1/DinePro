@@ -1,26 +1,42 @@
 import { useState } from 'react'
 import BillSummary from './BillSummary'
 import PrintBill from './PrintBill'
+import {
+  buildSettlementPreview,
+  discountCapRupees,
+  RECEPTIONIST_MAX_DISCOUNT_PERCENT,
+  toPaise,
+} from '../billingMath'
 
 function TableCard({ tableGroup, onCloseBill, onMarkItemServed, onCancelOrder, restaurant }) {
   const [expanded, setExpanded] = useState(true)
   const [showPrint, setShowPrint] = useState(false)
   const [showSettlement, setShowSettlement] = useState(false)
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
+  const [cancelTargetId, setCancelTargetId] = useState(null)
   const [cancelReason, setCancelReason] = useState('')
   const [cancelling, setCancelling] = useState(false)
 
+  // GST and service charge are restaurant settings now, not per-bill inputs (Bug #9).
   const [settlementForm, setSettlementForm] = useState({
     paymentMode: 'cash',
     discountAmount: '',
-    gstPercent: restaurant?.defaultGstPercent ?? '',
-    serviceChargeAmount: restaurant?.defaultServiceCharge ?? '',
     paymentReference: '',
     notes: '',
   })
 
   const latestStatus = tableGroup.orders.at(-1)?.status || 'new'
-  const settlement = buildSettlementPreview(tableGroup.totalAmount, settlementForm)
+  const settlement = buildSettlementPreview(tableGroup.totalAmount, settlementForm, {
+    defaultGstPercent: restaurant?.defaultGstPercent,
+    defaultServiceCharge: restaurant?.defaultServiceCharge,
+  })
+  const discountCap = discountCapRupees(tableGroup.totalAmount)
+  const discountNeedsApproval = toPaise(settlementForm.discountAmount) > toPaise(discountCap)
+
+  // The order the cancel dialog is acting on. Defaults to the first open order.
+  const cancelTarget = tableGroup.orders.find((order) => order.id === cancelTargetId) || tableGroup.orders[0]
+  const cancelTargetHasServed = Boolean(cancelTarget?.items?.some((item) => (item.status || 'new') === 'served'))
+  const cancelReasonOk = !cancelTargetHasServed || cancelReason.trim().length >= 3
 
   const statusClasses = {
     new: 'status-new',
@@ -36,13 +52,18 @@ function TableCard({ tableGroup, onCloseBill, onMarkItemServed, onCancelOrder, r
     served: 'Served',
   }
 
-  const handleCancelAll = async () => {
+  const openCancelDialog = () => {
+    setCancelTargetId(tableGroup.orders[0]?.id ?? null)
+    setCancelReason('')
+    setShowCancelConfirm(true)
+  }
+
+  // Cancels only the selected order (Bug #41). The table's other orders stay open.
+  const handleCancelOrder = async () => {
+    if (!cancelTarget || !cancelReasonOk) return
     setCancelling(true)
     try {
-      // Cancel all open orders for this table
-      for (const order of tableGroup.orders) {
-        await onCancelOrder(order.id, tableGroup.tableNumber, cancelReason)
-      }
+      await onCancelOrder(cancelTarget.id, tableGroup.tableNumber, cancelReason.trim())
       setShowCancelConfirm(false)
       setCancelReason('')
     } finally {
@@ -108,7 +129,7 @@ function TableCard({ tableGroup, onCloseBill, onMarkItemServed, onCancelOrder, r
               </button>
               <button
                 type="button"
-                onClick={() => setShowCancelConfirm(true)}
+                onClick={openCancelDialog}
                 className="action-button cancel text-sm"
               >
                 ✕ Cancel
@@ -137,8 +158,8 @@ function TableCard({ tableGroup, onCloseBill, onMarkItemServed, onCancelOrder, r
         />
       )}
 
-      {/* Cancel Confirm Modal */}
-      {showCancelConfirm && (
+      {/* Cancel Confirm Modal — one order at a time (Bug #41) */}
+      {showCancelConfirm && cancelTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="w-full max-w-sm rounded-3xl bg-[var(--card)] p-6 shadow-2xl">
             <div className="mb-4 text-center">
@@ -150,18 +171,44 @@ function TableCard({ tableGroup, onCloseBill, onMarkItemServed, onCancelOrder, r
                 Table {tableGroup.tableNumber}
               </h2>
               <p className="mt-2 text-sm text-[var(--text2)]">
-                Ye order chef panel se bhi hat jaayega. Confirm karo?
+                Sirf ek order cancel hoga. Table ke baaki orders waise hi rahenge.
               </p>
             </div>
 
+            {tableGroup.orders.length > 1 && (
+              <div className="mb-4 space-y-2" role="radiogroup" aria-label="Order to cancel">
+                {tableGroup.orders.map((order, index) => {
+                  const selected = order.id === cancelTarget.id
+                  return (
+                    <button
+                      key={order.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      onClick={() => setCancelTargetId(order.id)}
+                      className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left text-sm ${
+                        selected
+                          ? 'border-rose-400 bg-rose-50 text-[var(--text)]'
+                          : 'border-[rgba(184,135,70,0.18)] bg-[var(--bg)] text-[var(--text2)]'
+                      }`}
+                    >
+                      <span>Order {index + 1} · {order.items?.length || 0} item{order.items?.length === 1 ? '' : 's'} · {order.status}</span>
+                      <span className="font-semibold">Rs. {order.totalAmount}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+
             <label className="block mb-4">
               <span className="mb-1 block text-xs font-semibold text-[var(--text2)]">
-                Reason (optional)
+                Reason {cancelTargetHasServed ? '(required — served items hain)' : '(optional)'}
               </span>
               <input
                 value={cancelReason}
                 onChange={(e) => setCancelReason(e.target.value)}
                 placeholder="e.g. Customer left, wrong order..."
+                maxLength={200}
                 className="w-full rounded-xl border border-[rgba(184,135,70,0.18)] bg-[var(--bg)] px-3 py-3 text-sm text-[var(--text)] outline-none"
               />
             </label>
@@ -177,8 +224,8 @@ function TableCard({ tableGroup, onCloseBill, onMarkItemServed, onCancelOrder, r
               </button>
               <button
                 type="button"
-                onClick={handleCancelAll}
-                disabled={cancelling}
+                onClick={handleCancelOrder}
+                disabled={cancelling || !cancelReasonOk}
                 className="action-button cancel"
               >
                 {cancelling ? 'Cancelling...' : 'Yes, Cancel'}
@@ -232,25 +279,18 @@ function TableCard({ tableGroup, onCloseBill, onMarkItemServed, onCancelOrder, r
                 />
               </label>
 
-              <label>
-                <span className="mb-1 block text-xs font-semibold text-[var(--text2)]">GST (%)</span>
-                <input
-                  type="number" min="0"
-                  value={settlementForm.gstPercent}
-                  onChange={(e) => setSettlementForm({ ...settlementForm, gstPercent: e.target.value })}
-                  className="w-full rounded-xl border border-[rgba(184,135,70,0.18)] bg-[var(--bg)] px-3 py-3 text-sm text-[var(--text)] outline-none"
-                />
-              </label>
+              <div className="col-span-2 rounded-xl border border-[rgba(184,135,70,0.18)] bg-[var(--bg)] px-3 py-3 text-xs text-[var(--text2)]">
+                GST {settlement.gstPercent}% · Service charge Rs. {settlement.serviceChargeAmount}
+                <span className="block text-[var(--text3)]">Restaurant settings se aata hai (Settings mein change karo).</span>
+              </div>
 
-              <label>
-                <span className="mb-1 block text-xs font-semibold text-[var(--text2)]">Service charge (Rs.)</span>
-                <input
-                  type="number" min="0"
-                  value={settlementForm.serviceChargeAmount}
-                  onChange={(e) => setSettlementForm({ ...settlementForm, serviceChargeAmount: e.target.value })}
-                  className="w-full rounded-xl border border-[rgba(184,135,70,0.18)] bg-[var(--bg)] px-3 py-3 text-sm text-[var(--text)] outline-none"
-                />
-              </label>
+              <div className="col-span-2 text-xs">
+                <span className={discountNeedsApproval ? 'font-semibold text-rose-600' : 'text-[var(--text3)]'}>
+                  {discountNeedsApproval
+                    ? `Discount ${RECEPTIONIST_MAX_DISCOUNT_PERCENT}% se zyada hai — admin approval chahiye.`
+                    : `Receptionist discount cap: Rs. ${discountCap} (${RECEPTIONIST_MAX_DISCOUNT_PERCENT}%)`}
+                </span>
+              </div>
 
               <label>
                 <span className="mb-1 block text-xs font-semibold text-[var(--text2)]">Reference</span>
@@ -322,33 +362,6 @@ function TableCard({ tableGroup, onCloseBill, onMarkItemServed, onCancelOrder, r
       `}</style>
     </>
   )
-}
-
-const toNumber = (value) => {
-  const number = Number(value)
-  return Number.isFinite(number) ? number : 0
-}
-
-const roundMoney = (value) => Math.round(toNumber(value) * 100) / 100
-
-function buildSettlementPreview(subtotal, form) {
-  const discountAmount = Math.min(Math.max(toNumber(form.discountAmount), 0), subtotal)
-  const serviceChargeAmount = Math.max(toNumber(form.serviceChargeAmount), 0)
-  const gstPercent = Math.max(toNumber(form.gstPercent), 0)
-  const taxableAmount = Math.max(subtotal - discountAmount + serviceChargeAmount, 0)
-  const gstAmount = roundMoney((taxableAmount * gstPercent) / 100)
-
-  return {
-    subtotal: roundMoney(subtotal),
-    discountAmount: roundMoney(discountAmount),
-    serviceChargeAmount: roundMoney(serviceChargeAmount),
-    gstPercent: roundMoney(gstPercent),
-    gstAmount,
-    payableAmount: roundMoney(taxableAmount + gstAmount),
-    paymentMode: form.paymentMode,
-    paymentReference: form.paymentReference,
-    notes: form.notes,
-  }
 }
 
 export default TableCard

@@ -52,12 +52,6 @@ export function useTable(restaurantId, tableIdentifier) {
         if (!active) return
         setRestaurant(nextRestaurant)
 
-        if (nextRestaurant?.subscription?.isServiceEnabled === false) {
-          setServiceUnavailable(true)
-          setTable(null)
-          return
-        }
-
         const tableRes = await axios.get(`${BACKEND_URL}/api/tables/${restaurantId}/${tableIdentifier}`)
         const nextTable = tableRes.data.table
 

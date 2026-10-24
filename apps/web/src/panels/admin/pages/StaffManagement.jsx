@@ -2,12 +2,14 @@ import { useState, useEffect } from 'react'
 import toast, { Toaster } from 'react-hot-toast'
 import api from '@/lib/api'
 import { ContentSkeleton, RowsSkeleton } from '@/components/Skeleton'
+import SetupLinkDialog from '@/components/SetupLinkDialog'
 
 export default function StaffManagement({ restaurant }) {
   const [staff, setStaff] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({ name: '', email: '', role: 'chef' })
+  const [setupDialog, setSetupDialog] = useState(null)
 
   useEffect(() => { fetchStaff() }, [restaurant.id])
 
@@ -27,12 +29,29 @@ export default function StaffManagement({ restaurant }) {
       const { data } = await api.post(`/api/staff/${restaurant.id}`, form)
       if (data.success) {
         setStaff(prev => [data.staff, ...prev])
-        toast.success(`Staff added! Temp password: ${data.staff.tempPassword}`, { duration: 10000 })
         setForm({ name: '', email: '', role: 'chef' })
+        toast.success('Staff account ban gaya')
+        if (data.staff.setupLink) {
+          setSetupDialog({ title: 'Setup link ready', email: data.staff.email, link: data.staff.setupLink })
+        } else {
+          toast.error(data.staff.setupLinkError || 'Setup link nahi bana. "Setup link" button se dobara try karo.')
+        }
       }
     } catch (err) {
       toast.error(err?.response?.data?.error || 'Could not add staff')
     } finally { setSaving(false) }
+  }
+
+  // Bug #25: a fresh setup link for someone who lost theirs or whose link expired.
+  const handleSetupLink = async (member) => {
+    try {
+      const { data } = await api.post(`/api/staff/${restaurant.id}/${member.uid}/setup-link`)
+      if (data.success) {
+        setSetupDialog({ title: 'New setup link', email: data.email, link: data.setupLink })
+      }
+    } catch (err) {
+      toast.error(err?.response?.data?.error || 'Setup link nahi bana')
+    }
   }
 
   const handleToggle = async (uid) => {
@@ -68,6 +87,7 @@ export default function StaffManagement({ restaurant }) {
             className="border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-orange-400">
             <option value="chef">Chef</option>
             <option value="receptionist">Receptionist</option>
+            <option value="admin">Admin</option>
           </select>
           <button onClick={handleAdd} disabled={saving}
             className="bg-orange-500 text-white rounded-xl px-6 py-3 font-semibold hover:bg-orange-600 transition disabled:opacity-50">
@@ -107,10 +127,16 @@ export default function StaffManagement({ restaurant }) {
                     </span>
                   </td>
                   <td className="px-6 py-4">
-                    <button onClick={() => handleToggle(s.uid)}
-                      className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition ${s.isActive ? 'bg-red-50 text-red-600 hover:bg-red-100' : 'bg-green-50 text-green-600 hover:bg-green-100'}`}>
-                      {s.isActive ? 'Deactivate' : 'Activate'}
-                    </button>
+                    <div className="flex gap-2">
+                      <button onClick={() => handleSetupLink(s)}
+                        className="px-4 py-1.5 rounded-lg text-xs font-semibold transition bg-gray-100 text-gray-700 hover:bg-gray-200">
+                        Setup link
+                      </button>
+                      <button onClick={() => handleToggle(s.uid)}
+                        className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition ${s.isActive ? 'bg-red-50 text-red-600 hover:bg-red-100' : 'bg-green-50 text-green-600 hover:bg-green-100'}`}>
+                        {s.isActive ? 'Deactivate' : 'Activate'}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -118,6 +144,14 @@ export default function StaffManagement({ restaurant }) {
           </table>
           </div>
         </div>
+      )}
+      {setupDialog && (
+        <SetupLinkDialog
+          title={setupDialog.title}
+          email={setupDialog.email}
+          link={setupDialog.link}
+          onClose={() => setSetupDialog(null)}
+        />
       )}
     </div>
   )

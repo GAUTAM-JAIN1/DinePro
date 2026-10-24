@@ -64,7 +64,7 @@ export default function TableManager({ restaurant }) {
     try {
       const { data } = await api.delete(`/api/tables/${restaurant.id}/${id}`)
       if (data.success) { setTables(prev => prev.filter(t => t.id !== id)); toast.success('Deleted!') }
-    } catch (err) { toast.error('Could not delete') }
+    } catch (err) { toast.error(err?.response?.data?.error || 'Could not delete') }
   }
 
   const downloadQR = (tableNum) => {

@@ -17,6 +17,7 @@ function MenuManager({ restaurant }) {
     name: '', nameHindi: '', price: '', category: '', categoryHindi: '',
     description: '', descriptionHindi: '', imageUrl: '', isVeg: true,
     isAvailable: true, hasVariants: false, variants: [],
+    subcategory: '', subcategoryHindi: '', isBestseller: false,
   }
   const [form, setForm] = useState(emptyForm)
 
@@ -71,7 +72,8 @@ function MenuManager({ restaurant }) {
       price: item.price || '', category: item.category || '',
       categoryHindi: item.categoryHindi || '',
       description: item.description || '', descriptionHindi: item.descriptionHindi || '',
-      imageUrl: item.imageUrl || '', isVeg: item.isVeg ?? true,
+      imageUrl: item.imageUrl || '', subcategory: item.subcategory || '', subcategoryHindi: item.subcategoryHindi || '',
+      isBestseller: item.isBestseller ?? false, isVeg: item.isVeg ?? true,
       isAvailable: item.isAvailable ?? true,
       hasVariants: item.hasVariants ?? false,
       variants: item.variants || [],

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { createSocket } from '@/lib/socket'
+import toast from 'react-hot-toast'
+import { createSocket, emitAcked } from '@/lib/socket'
 import axios from 'axios'
 import { auth } from '@/lib/firebase'
 import { playAlert } from '@/lib/kitchenAlertSound'
@@ -11,6 +12,15 @@ async function getAuthHeaders() {
   if (!user) return {}
   const token = await user.getIdToken()
   return { Authorization: `Bearer ${token}` }
+}
+
+// Same rule as the server (orderService deriveOrderStatus): the order follows its items.
+function deriveOrderStatus(items = []) {
+  const statuses = items.map((item) => item.status || 'new')
+  if (statuses.length > 0 && statuses.every((s) => s === 'served')) return 'served'
+  if (statuses.length > 0 && statuses.every((s) => s === 'ready' || s === 'served')) return 'ready'
+  if (statuses.some((s) => s === 'preparing' || s === 'ready' || s === 'served')) return 'preparing'
+  return 'new'
 }
 
 function showBrowserNotification(order, titlePrefix = 'New kitchen order') {
@@ -194,65 +204,53 @@ export function useKitchenOrders(restaurantId, options = {}) {
     }
   }, [notifyKitchen, restaurantId])
 
-  const markPreparing = (order) => {
+  // Bug #23: the change shows at once; the server then acknowledges it. If the server
+  // refuses (or never answers), only the failed items roll back and the reason is shown.
+  // Bug #50: `targets` is what the screen shows, so a filtered view never touches hidden items.
+  const sendItemStatus = async (order, targets, status) => {
     const socket = socketRef.current
-    if (!socket) return
-    socket.emit('order_preparing', { ...order, restaurantId })
-    order.items?.forEach(item => {
-      if ((item.status || 'new') === 'new') {
-        socket.emit('item_status', {
-          restaurantId, orderId: order.id,
-          itemKey: item.lineId || item.id, status: 'preparing',
-        })
+    if (!socket || targets.length === 0) return
+    const keyOf = (item) => item.lineId || item.id
+    const previous = new Map(targets.map((item) => [keyOf(item), item.status || 'new']))
+
+    const applyToItems = (transform) => setOrders((prev) => prev.map((o) => {
+      if (o.id !== order.id) return o
+      const items = (o.items || []).map(transform)
+      return { ...o, items, status: deriveOrderStatus(items) }
+    }))
+
+    applyToItems((item) => (previous.has(keyOf(item)) ? { ...item, status } : item))
+
+    const results = await Promise.all(
+      targets.map((item) => emitAcked(socket, 'item_status', {
+        restaurantId, orderId: order.id, itemKey: keyOf(item), status,
+      }))
+    )
+
+    const failedKeys = new Set()
+    let reason = null
+    results.forEach((result, index) => {
+      if (!result.ok) {
+        failedKeys.add(keyOf(targets[index]))
+        reason = reason || result.error
       }
     })
-    setOrders(prev => prev.map(o => {
-      if (o.id !== order.id) return o
-      return {
-        ...o, status: 'preparing',
-        items: o.items.map(item => ({
-          ...item, status: item.status === 'ready' ? 'ready' : 'preparing',
-        })),
-      }
-    }))
+
+    if (failedKeys.size > 0) {
+      applyToItems((item) => (failedKeys.has(keyOf(item)) ? { ...item, status: previous.get(keyOf(item)) } : item))
+      toast.error(reason || 'Could not update the item. Please try again.')
+    }
   }
 
-  const markReady = (order) => {
-    const socket = socketRef.current
-    if (!socket) return
-    socket.emit('order_ready', { ...order, restaurantId })
-    order.items?.forEach(item => {
-      if ((item.status || 'new') !== 'ready' && (item.status || 'new') !== 'served') {
-        socket.emit('item_status', {
-          restaurantId, orderId: order.id,
-          itemKey: item.lineId || item.id, status: 'ready',
-        })
-      }
-    })
-    setOrders(prev => prev.map(o => {
-      if (o.id !== order.id) return o
-      return {
-        ...o, status: 'ready',
-        items: o.items.map(item => ({
-          ...item, status: item.status === 'served' ? 'served' : 'ready',
-        })),
-      }
-    }))
-  }
+  // "Mark preparing" moves only items that are still new; ready items stay ready (Bug #49).
+  const markPreparing = (order, items = order.items || []) =>
+    sendItemStatus(order, items.filter((item) => (item.status || 'new') === 'new'), 'preparing')
 
-  const updateItemStatus = (order, item, status) => {
-    const socket = socketRef.current
-    if (!socket) return
-    const itemKey = item.lineId || item.id
-    socket.emit('item_status', { restaurantId, orderId: order.id, itemKey, status })
-    setOrders(prev => prev.map(o => {
-      if (o.id !== order.id) return o
-      const items = o.items.map(orderItem =>
-        (orderItem.lineId || orderItem.id) === itemKey ? { ...orderItem, status } : orderItem
-      )
-      return { ...o, items }
-    }))
-  }
+  // "Mark ready" moves only the items passed in (what the screen shows) (Bug #50).
+  const markReady = (order, items = order.items || []) =>
+    sendItemStatus(order, items.filter((item) => !['ready', 'served'].includes(item.status || 'new')), 'ready')
+
+  const updateItemStatus = (order, item, status) => sendItemStatus(order, [item], status)
 
   const sendChefMessage = (order, message) => {
     const socket = socketRef.current

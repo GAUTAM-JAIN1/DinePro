@@ -1,27 +1,23 @@
 const { getRestaurant } = require('../services/restaurantService')
+const { sendError } = require('../utils/httpErrors')
+const { restaurantIdsFromRequest } = require('./restaurantAccess')
 
-function restaurantIdFromRequest(req) {
-  return req.params.restaurantId || req.body.restaurantId || req.query.restaurantId
-}
-
+/**
+ * Bug #37: attach to every mutation, not just some. Reads the restaurant id the
+ * same way requireRestaurantAccess does, so the two always refer to the same restaurant.
+ */
 async function requireActiveSubscription(req, res, next) {
   try {
-    const restaurantId = restaurantIdFromRequest(req)
+    const restaurantId = restaurantIdsFromRequest(req)[0]
 
     if (!restaurantId) {
-      return res.status(400).json({
-        success: false,
-        error: 'restaurantId is required',
-      })
+      return res.status(400).json({ success: false, error: 'restaurantId is required' })
     }
 
-    const restaurant = await getRestaurant(restaurantId)
+    const restaurant = await getRestaurant(String(restaurantId))
 
     if (!restaurant) {
-      return res.status(404).json({
-        success: false,
-        error: 'Restaurant not found',
-      })
+      return res.status(404).json({ success: false, error: 'Restaurant not found' })
     }
 
     req.restaurant = restaurant
@@ -36,10 +32,7 @@ async function requireActiveSubscription(req, res, next) {
 
     next()
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    })
+    sendError(res, error, { label: 'subscription check' })
   }
 }
 

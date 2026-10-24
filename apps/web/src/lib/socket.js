@@ -47,3 +47,29 @@ export function ensureConnected(socket) {
 export function disconnectAllSockets() {
   liveSockets.forEach((socket) => socket.disconnect())
 }
+
+/**
+ * Emit a staff event and wait for the server's acknowledgement (Bug #23).
+ * Resolves with the server's { ok, ... } reply, or { ok: false, error } when the
+ * socket is down or no reply arrives in time, so the caller can roll back.
+ */
+export function emitAcked(socket, event, payload, timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    if (!socket || !socket.connected) {
+      resolve({ ok: false, error: 'Not connected. Check the connection and try again.' })
+      return
+    }
+    let done = false
+    const timer = setTimeout(() => {
+      if (done) return
+      done = true
+      resolve({ ok: false, error: 'No response from the server. Check the connection and try again.' })
+    }, timeoutMs)
+    socket.emit(event, payload, (response) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      resolve(response && typeof response === 'object' ? response : { ok: false, error: 'Unexpected response from the server.' })
+    })
+  })
+}

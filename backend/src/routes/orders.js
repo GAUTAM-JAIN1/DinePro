@@ -9,37 +9,41 @@ const {
   resetDailyStats,
   getDailyReport,
 } = require('../services/orderService')
+const { actorFromUser } = require('../services/auditService')
 const { verifyToken, requireRole } = require('../middleware/auth')
 const { requireActiveSubscription } = require('../middleware/subscription')
 const { requireRestaurantAccess } = require('../middleware/restaurantAccess')
-const { orderRateLimit } = require('../middleware/rateLimit')
-const { validate, orderCreate } = require('../middleware/validators')
+const { orderRateLimit, orderIpRateLimit } = require('../middleware/rateLimit')
+const { sendError } = require('../utils/httpErrors')
+const { validate, orderCreate, orderStatusUpdate } = require('../middleware/validators')
 const { broadcastNewOrder } = require('../socket/orderSocket')
 
 // POST /api/orders — PUBLIC (customer places order)
 router.post(
   '/',
+  orderIpRateLimit,
   orderRateLimit,
   requireActiveSubscription,
   validate(orderCreate),
   async (req, res) => {
     try {
-      const { restaurantId, tableId, tableNumber, items, specialInstructions } = req.body
-      const order = await upsertOrder(restaurantId, {
-        tableId, tableNumber, items, specialInstructions
+      const { restaurantId, tableId, items, specialInstructions, idempotencyKey } = req.body
+      const { order, replayed } = await upsertOrder(restaurantId, {
+        tableId, items, specialInstructions, idempotencyKey,
       })
 
-      // Broadcast from the server so clients can never forge "new order" events
+      // A replayed request (client retry) was already announced the first
+      // time, so don't announce it again.
       const io = req.app.get('io')
-      if (io) {
+      if (io && !replayed) {
         broadcastNewOrder(io, order).catch((err) =>
           console.error('broadcastNewOrder failed:', err.message)
         )
       }
 
-      res.json({ success: true, order })
+      res.json({ success: true, order, replayed })
     } catch (err) {
-      res.status(err.statusCode || 500).json({ success: false, error: err.message })
+      sendError(res, err, { label: 'orders.create' })
     }
   }
 )
@@ -53,7 +57,7 @@ router.get(
       const stats = await getDailyStats(req.params.restaurantId)
       res.json({ success: true, stats })
     } catch (err) {
-      res.status(500).json({ success: false, error: err.message })
+      sendError(res, err, { label: 'orders' })
     }
   }
 )
@@ -64,10 +68,10 @@ router.post(
   verifyToken, requireRole('admin', 'receptionist'), requireRestaurantAccess, requireActiveSubscription,
   async (req, res) => {
     try {
-      const result = await resetDailyStats(req.params.restaurantId)
+      const result = await resetDailyStats(req.params.restaurantId, actorFromUser(req.user))
       res.json({ success: true, ...result })
     } catch (err) {
-      res.status(500).json({ success: false, error: err.message })
+      sendError(res, err, { label: 'orders' })
     }
   }
 )
@@ -81,7 +85,7 @@ router.get(
       const report = await getDailyReport(req.params.restaurantId)
       res.json({ success: true, report })
     } catch (err) {
-      res.status(500).json({ success: false, error: err.message })
+      sendError(res, err, { label: 'orders' })
     }
   }
 )
@@ -96,7 +100,7 @@ router.get(
       const orders = await getOrderHistory(req.params.restaurantId, limit)
       res.json({ success: true, orders })
     } catch (err) {
-      res.status(500).json({ success: false, error: err.message })
+      sendError(res, err, { label: 'orders' })
     }
   }
 )
@@ -110,22 +114,29 @@ router.get(
       const orders = await getRestaurantOrders(req.params.restaurantId)
       res.json({ success: true, orders })
     } catch (err) {
-      res.status(500).json({ success: false, error: err.message })
+      sendError(res, err, { label: 'orders' })
     }
   }
 )
 
-// PUT /api/orders/:restaurantId/:orderId
+// PUT /api/orders/:restaurantId/:orderId — kitchen status transitions only.
+// Bug #10: this used to forward req.body straight into updateOrder with no
+// validation at all, so a caller could set totalAmount, settledAmount,
+// items, closedAt — any field on the order doc. orderStatusUpdate below
+// whitelists this down to the one legitimate use (new -> preparing -> ready
+// -> served); settlement, cancellation and item edits go through their own
+// dedicated endpoints/sockets instead.
 router.put(
   '/:restaurantId/:orderId',
   verifyToken, requireRole('admin', 'chef', 'receptionist'), requireRestaurantAccess, requireActiveSubscription,
+  validate(orderStatusUpdate),
   async (req, res) => {
     try {
       const { restaurantId, orderId } = req.params
       const order = await updateOrder(restaurantId, orderId, req.body)
       res.json({ success: true, order })
     } catch (err) {
-      res.status(500).json({ success: false, error: err.message })
+      sendError(res, err, { label: 'orders' })
     }
   }
 )

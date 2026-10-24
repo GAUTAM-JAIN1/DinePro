@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useAuth } from '@/context/AuthContext'
 import Notice from '@/components/Notice'
+import AudioUnlockBanner from '@/components/AudioUnlockBanner'
 import KitchenDisplay from './pages/KitchenDisplay'
 
 const BACKEND_URL = import.meta.env.VITE_API_URL
@@ -32,6 +33,7 @@ export default function ChefPanel() {
 
   return (
     <div className="theme-chef">
+      <AudioUnlockBanner />
       <KitchenDisplay
         restaurantId={restaurantId}
         restaurantName={restaurantName}

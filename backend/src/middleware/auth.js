@@ -1,21 +1,24 @@
 const { auth } = require('../services/firebaseAdmin')
 
 /**
- * Verify Firebase JWT token from Authorization header
+ * Verify Firebase JWT token from Authorization header.
+ *
+ * Bug #12: `checkRevoked` makes Firebase reject tokens whose refresh tokens were
+ * revoked and accounts that were disabled. Without it a deactivated staff member
+ * kept working until their one-hour ID token expired.
  */
 async function verifyToken(req, res, next) {
+  const token = req.headers.authorization?.split('Bearer ')[1]
+
+  if (!token) {
+    return res.status(401).json({ success: false, error: 'No token provided' })
+  }
+
   try {
-    const token = req.headers.authorization?.split('Bearer ')[1]
-
-    if (!token) {
-      return res.status(401).json({ error: 'No token provided' })
-    }
-
-    const decodedToken = await auth.verifyIdToken(token)
-    req.user = decodedToken
+    req.user = await auth.verifyIdToken(token, true)
     next()
   } catch (error) {
-    res.status(401).json({ error: 'Invalid token' })
+    res.status(401).json({ success: false, error: 'Session expired. Please sign in again.' })
   }
 }
 
@@ -26,7 +29,7 @@ async function verifyToken(req, res, next) {
 function requireRole(...roles) {
   return (req, res, next) => {
     if (!req.user || !roles.includes(req.user.role)) {
-      return res.status(403).json({ error: 'Insufficient permissions' })
+      return res.status(403).json({ success: false, error: 'Insufficient permissions' })
     }
     next()
   }
@@ -39,7 +42,7 @@ function requirePlatformAdmin(req, res, next) {
     req.user?.role === 'superadmin'
 
   if (!isPlatformAdmin) {
-    return res.status(403).json({ error: 'Platform admin access required' })
+    return res.status(403).json({ success: false, error: 'Platform admin access required' })
   }
 
   next()

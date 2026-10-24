@@ -8,6 +8,8 @@ const starterItems = [
   { name: 'Butter Naan', price: 45, category: 'Breads', description: 'Soft tandoor naan with butter' },
 ]
 
+const blankDish = () => ({ name: '', price: '', category: 'Mains', description: '' })
+
 function SetupWizard({ restaurant, setRestaurant }) {
   const [step, setStep] = useState(0)
   const [saving, setSaving] = useState(false)
@@ -16,7 +18,7 @@ function SetupWizard({ restaurant, setRestaurant }) {
     name: restaurant.name || '',
     address: restaurant.address || '',
     phone: restaurant.phone || '',
-    themeColor: restaurant.themeColor || '#B88746',
+    brandColor: restaurant.brandColor || restaurant.themeColor || '#B88746',
   })
 
   // NEW: Billing defaults step
@@ -25,7 +27,7 @@ function SetupWizard({ restaurant, setRestaurant }) {
     defaultServiceCharge: restaurant.defaultServiceCharge ?? 0,
   })
 
-  const [menuItems, setMenuItems] = useState(starterItems)
+  const [menuItems, setMenuItems] = useState([blankDish()])
   const [tableCount, setTableCount] = useState(3)
 
   const steps = ['Profile', 'Billing', 'Menu', 'Tables']
@@ -50,46 +52,63 @@ function SetupWizard({ restaurant, setRestaurant }) {
     ])
   }
 
+  // Bug #70: sample dishes are offered, never saved on their own. Only dishes the owner keeps are sent.
+  const addSampleDishes = () => {
+    setMenuItems((prev) => {
+      const have = new Set(prev.map((item) => item.name.trim().toLowerCase()).filter(Boolean))
+      const extra = starterItems.filter((item) => !have.has(item.name.toLowerCase()))
+      return [...prev.filter((item) => item.name.trim()), ...extra]
+    })
+  }
+
   const finishSetup = async () => {
     setSaving(true)
     try {
-      // Save profile + billing defaults together
       await api.put(`/api/restaurants/${restaurant.id}`, {
-        ...profile,
+        name: profile.name.trim(),
+        address: profile.address,
+        phone: profile.phone,
+        brandColor: profile.brandColor,
         defaultGstPercent: Number(billing.defaultGstPercent),
         defaultServiceCharge: Number(billing.defaultServiceCharge),
       })
 
-      const validMenuItems = menuItems.filter((item) => item.name.trim() && Number(item.price) > 0)
-      await Promise.all(
-        validMenuItems.map((item) =>
-          api.post(`/api/menu/${restaurant.id}`, {
-            ...item,
-            name: item.name.trim(),
-            price: Number(item.price),
-          })
-        )
-      )
+      const dishes = menuItems.map((item) => ({
+        name: item.name.trim(),
+        price: Number(item.price),
+        category: item.category.trim() || 'Mains',
+        description: item.description.trim(),
+      }))
+      const sendable = dishes.filter((dish) => dish.name && dish.price > 0)
+      // Bug #56: rows with only half filled in are reported, not dropped silently.
+      const incomplete = dishes.filter((dish) => (dish.name || dish.price) && !(dish.name && dish.price > 0))
 
-      await Promise.all(
-        Array.from({ length: Number(tableCount) }, (_, index) =>
-          api.post(`/api/tables/${restaurant.id}`, { tableNumber: String(index + 1) })
-            .catch((error) => {
-              if (error.response?.status === 400) return null
-              throw error
-            })
-        )
-      )
+      // Bug #55: both bulk calls are idempotent. Pressing Finish again after a failure picks up where it stopped.
+      const menuRes = sendable.length
+        ? await api.post(`/api/menu/${restaurant.id}/bulk`, { items: sendable })
+        : { data: { created: [], skipped: [], errors: [] } }
+      const tablesRes = await api.post(`/api/tables/${restaurant.id}/bulk`, { count: Number(tableCount) })
 
       const completedRestaurant = await api.put(`/api/restaurants/${restaurant.id}`, {
         onboardingCompleted: true,
         onboardingCompletedAt: new Date().toISOString(),
       })
 
+      const menuResult = menuRes.data
+      const notes = [
+        `${menuResult.created.length} dish(es) added`,
+        menuResult.skipped.length ? `${menuResult.skipped.length} already on the menu` : null,
+        incomplete.length
+          ? `${incomplete.length} row(s) not saved, add a name and a price: ${incomplete.map((d) => d.name || 'unnamed').join(', ')}`
+          : null,
+        ...menuResult.errors.map((e) => `${e.name || 'Dish'}: ${e.reason}`),
+        `${tablesRes.data.created.length} table(s) added`,
+      ].filter(Boolean)
+
       setRestaurant(completedRestaurant.data.restaurant)
-      toast.success('Setup complete. You are ready for live orders.')
+      toast.success(`Setup complete. ${notes.join(' · ')}`, { duration: 9000 })
     } catch (error) {
-      toast.error(error.response?.data?.error || 'Setup could not be completed')
+      toast.error(error.response?.data?.error || 'Setup was not completed. Press Finish again to resume. Nothing is lost.')
     } finally {
       setSaving(false)
     }
@@ -163,8 +182,8 @@ function SetupWizard({ restaurant, setRestaurant }) {
                 <span className="mb-2 block text-sm font-medium text-gray-700">Brand Color</span>
                 <input
                   type="color"
-                  value={profile.themeColor}
-                  onChange={(e) => setProfile({ ...profile, themeColor: e.target.value })}
+                  value={profile.brandColor}
+                  onChange={(e) => setProfile({ ...profile, brandColor: e.target.value })}
                   className="h-12 w-20 rounded-xl border border-gray-200"
                 />
               </label>
@@ -239,6 +258,13 @@ function SetupWizard({ restaurant, setRestaurant }) {
           {/* STEP 2: Menu */}
           {step === 2 && (
             <div className="space-y-3">
+              <button
+                type="button"
+                onClick={addSampleDishes}
+                className="rounded-xl bg-orange-50 px-4 py-2 text-sm font-semibold text-orange-700"
+              >
+                Add sample dishes
+              </button>
               {menuItems.map((item, index) => (
                 <div key={index} className="grid grid-cols-1 gap-3 rounded-xl bg-gray-50 p-3 md:grid-cols-4">
                   <input

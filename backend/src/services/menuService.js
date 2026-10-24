@@ -1,4 +1,5 @@
 const { db } = require('./firebaseAdmin')
+const { HttpError } = require('./billing')
 
 function normalizeMenuItem(doc) {
   const data = doc.data()
@@ -100,7 +101,7 @@ async function toggleItemAvailability(restaurantId, itemId) {
     .doc(itemId)
 
   const doc = await itemRef.get()
-  if (!doc.exists) throw new Error('Menu item not found')
+  if (!doc.exists) throw new HttpError(404, 'Menu item not found', { code: 'MENU_ITEM_NOT_FOUND' })
 
   const current = doc.data()
   const newAvail = !(current.isAvailable ?? current.available ?? true)
@@ -125,7 +126,34 @@ async function reorderMenuItems(restaurantId, items) {
   return { success: true }
 }
 
+/**
+ * Bug #55: adds dishes that are not on the menu yet, matched by name and
+ * category, so the same setup request can be repeated safely.
+ * `rows` is [{ index, data }] where data already passed menuItemCreate.
+ */
+async function addMenuItemsIfMissing(restaurantId, rows) {
+  const existing = await getRestaurantMenu(restaurantId)
+  const keyOf = (item) =>
+    `${String(item.name || '').trim().toLowerCase()}|${String(item.category || 'Mains').trim().toLowerCase()}`
+  const known = new Set(existing.map(keyOf))
+  const created = []
+  const skipped = []
+
+  for (const row of rows) {
+    const key = keyOf(row.data)
+    if (known.has(key)) {
+      skipped.push({ index: row.index, name: row.data.name, reason: 'already on the menu' })
+      continue
+    }
+    known.add(key)
+    created.push(await addMenuItem(restaurantId, row.data))
+  }
+
+  return { created, skipped }
+}
+
 module.exports = {
+  addMenuItemsIfMissing,
   addMenuItem,
   deleteMenuItem,
   getRestaurantMenu,
